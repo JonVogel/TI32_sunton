@@ -6,6 +6,13 @@ A from-scratch TI Extended BASIC interpreter targeting the
 software sprite layer over a double-buffered 800×480 RGB panel, and
 BLE-HID keyboard input.
 
+> **⚠ Work in progress.** This is an active, evolving project.
+> The language coverage and runtime are usable today (see
+> `KEYWORDS.md` for the implementation status of every feature),
+> but expect rough edges, partially-implemented corners, and
+> behavior that may change between commits. Bug reports and PRs
+> welcome.
+
 ## Hardware
 
 - **MCU**: ESP32-S3 with 16 MB flash and 8 MB octal PSRAM.
