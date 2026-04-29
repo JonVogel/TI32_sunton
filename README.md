@@ -92,6 +92,11 @@ each upload so the COM port is free.
 - **`PORT_NOTES.md`** — notes on porting to other ESP32-S3 boards.
 - **`GROM_NOTES.md`** — research notes on the original TI Extended
   BASIC GROMs.
+- **`TI Extended Basic Manual.pdf`** — Texas Instruments' original
+  TI Extended BASIC user reference manual. The canonical source of
+  truth for what each statement / function / CALL subprogram is
+  supposed to do, against which this simulator's behavior is
+  measured.
 
 ## Utilities
 
