@@ -1,7 +1,7 @@
 # TI Extended BASIC for ESP32-S3
 
 A from-scratch TI Extended BASIC interpreter targeting the
-[Sunton ESP32-8048S043C](https://www.makerfabs.com/sunton-esp32-s3-4-3-inch-800-480-ips-rgb-display.html)
+[Sunton ESP32-8048S043C](https://www.amazon.com/dp/B0CLGCMWQ7)
 4.3" RGB-display dev board. Tokenized REPL, V9T9 disk-image support,
 software sprite layer over a double-buffered 800×480 RGB panel, and
 BLE-HID keyboard input.
