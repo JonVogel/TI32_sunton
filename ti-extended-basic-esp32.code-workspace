@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../ti-basic-otg"
+		},
+		{
+			"path": "../ti-scott-adams-esp32"
+		}
+	]
+}
