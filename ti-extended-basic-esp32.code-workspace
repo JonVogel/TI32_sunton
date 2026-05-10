@@ -8,6 +8,12 @@
 		},
 		{
 			"path": "../ti-scott-adams-esp32"
+		},
+		{
+			"path": "../esp32-s3-box-basic"
+		},
+		{
+			"path": "../esp-box"
 		}
 	]
 }
