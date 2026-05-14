@@ -28,6 +28,7 @@
 #include "file_io.h"
 #include "sprites.h"
 #include "line_editor.h"
+#include "sd_manager.h"
 
 // ---------------------------------------------------------------------------
 // ESP32-8048S043C (Sunton 4.3" 800x480 RGB) pin map
@@ -1181,6 +1182,20 @@ void tiReadJoystick(int unit, int* outX, int* outY)
   *outY = bleGpJoystickY(unit);
 }
 
+// Strong overrides for CALL PAIR / CALL UNPAIR — bridge into BleHidHost.
+// Useful for triggering pairing from inside BASIC without leaving the
+// interpreter (and without finding the BOOT button on the back of the
+// board).
+void tiPair()
+{
+  BleHidHost::requestPairingMode();
+}
+
+void tiUnpair()
+{
+  BleHidHost::requestUnpairAll();
+}
+
 // 60 Hz integration of sprite velocity. Each velocity unit is 1/8 of a
 // TI pixel per frame, so a 16 ms tick advances by vel/8. Sprites that
 // actually crossed a pixel boundary get erased (char grid restored)
@@ -1669,8 +1684,9 @@ static void showBootScreen()
   // flush() is called.
   tft->flush();
 
-  // Wait for any key — from Serial or BLE keyboard. Keep BLE scanning
-  // alive so reconnect can complete while we're sitting here.
+  // Wait for any key — from Serial or BLE keyboard. The title screen
+  // is BLE_KB_TITLE mode (aggressive scan) so a keyboard can be turned
+  // on right now and connect before we leave the splash.
   while (!Serial.available() && !bleKbAvailable())
   {
     bleKbTask();
@@ -1679,6 +1695,13 @@ static void showBootScreen()
   }
   while (Serial.available()) { Serial.read(); delay(2); }
   while (bleKbAvailable())   { bleKbRead();  delay(2); }
+
+  // User dismissed the title. Drop to INTERACTIVE — if no keyboard
+  // connected during the splash, the radio goes idle so the interpreter
+  // gets full CPU. Reconnect happens automatically only if a previously-
+  // connected keyboard drops out; otherwise the user can hit BOOT or
+  // type CALL PAIR to re-engage.
+  bleKbSetMode(BLE_KB_INTERACTIVE);
 
   // Clear and show the menu screen
   fillBackground(tiPalette[8]);
@@ -2463,7 +2486,7 @@ static bool scanForLoadProgram()
     cmdRun();
     return true;
   }
-  if (fio::g_sdOk && SD.exists("/LOAD.bas"))
+  if (sdmgr::requireSD() && SD.exists("/LOAD.bas"))
   {
     cmdOld("SDCARD.LOAD");
     cmdRun();
@@ -2623,6 +2646,35 @@ static int parseDskFileSpec(const char* in, char* nameOut, int nameSize)
   return drive;
 }
 
+// Smart path resolution for OLD / MERGE / DELETE on flat filesystems
+// (FLASH and SDCARD — not DSK images, which have their own naming).
+// Build a path under root for `name`, then prefer the exact name; if
+// that doesn't exist, fall back to <name>.bas. This handles three
+// real-world cases without forcing the user to remember extensions:
+//   1. File saved from inside the emulator via SAVE → has ".bas"
+//      appended by cmdSave. Looking up "FOO" finds "FOO.bas".
+//   2. File dropped onto the SD card from a PC with an extension —
+//      either ".bas" (looked up as-is) or anything else like "CONFIG"
+//      (looked up bare). Both work.
+//   3. Externally-created file with no extension (e.g., "README") —
+//      "FLASH.README" finds it because the bare-name lookup wins.
+// outPath gets the resolved on-disk path. Returns true if a file was
+// found at one of the two candidate locations.
+static bool resolveExistingPath(fs::FS& fs, const char* name,
+                                char* outPath, int outSize)
+{
+  if (!name || name[0] == '\0') return false;
+  // Try the literal name first.
+  snprintf(outPath, outSize, "/%s", name);
+  if (fs.exists(outPath)) return true;
+  // Fall back to <name>.bas — but only if the user didn't already
+  // supply an extension. If they typed "FOO.txt" and that doesn't
+  // exist, we should not silently try "FOO.txt.bas".
+  if (strchr(name, '.') != NULL) return false;
+  snprintf(outPath, outSize, "/%s.bas", name);
+  return fs.exists(outPath);
+}
+
 static void cmdSave(const char* filename)
 {
   char tiName[16];
@@ -2667,7 +2719,7 @@ static void cmdSave(const char* filename)
   }
   else if (strncasecmp(filename, "SDCARD.", 7) == 0)
   {
-    if (!fio::g_sdOk) { printError("* DEVICE NOT PRESENT"); return; }
+    if (!sdmgr::requireSD()) { printError("* DEVICE NOT PRESENT"); return; }
     targetFs = &SD;
     devLabel = "SDCARD";
     nameStart = filename + 7;
@@ -2751,14 +2803,18 @@ static void cmdOld(const char* filename)
   }
   else if (strncasecmp(filename, "SDCARD.", 7) == 0)
   {
-    if (!fio::g_sdOk) { printError("* DEVICE NOT PRESENT"); return; }
+    if (!sdmgr::requireSD()) { printError("* DEVICE NOT PRESENT"); return; }
     sourceFs = &SD;
     devLabel = "SDCARD";
     nameStart = filename + 7;
   }
 
   char path[48];
-  snprintf(path, sizeof(path), "/%s.bas", nameStart);
+  if (!resolveExistingPath(*sourceFs, nameStart, path, sizeof(path)))
+  {
+    printError("* FILE ERROR");
+    return;
+  }
   File f = sourceFs->open(path, "r");
   if (!f)
   {
@@ -2786,12 +2842,33 @@ static void cmdOld(const char* filename)
 // MERGE "filename" — load a text-format program from LittleFS and fold
 // its lines into the current program. Line-number collisions overwrite
 // (matching TI's MERGE behavior). Unlike OLD, the existing program
-// is NOT cleared first.
+// is NOT cleared first. Path resolution mirrors OLD: prefer the exact
+// name, fall back to <name>.bas if no extension was given.
 static void cmdMerge(const char* filename)
 {
+  // Accept FLASH.NAME / SDCARD.NAME / bare NAME like OLD does. Bare
+  // names default to FLASH for back-compat.
+  fs::FS* sourceFs = &LittleFS;
+  const char* nameStart = filename;
+  if (strncasecmp(filename, "FLASH.", 6) == 0)
+  {
+    sourceFs = &LittleFS;
+    nameStart = filename + 6;
+  }
+  else if (strncasecmp(filename, "SDCARD.", 7) == 0)
+  {
+    if (!sdmgr::requireSD()) { printError("* DEVICE NOT PRESENT"); return; }
+    sourceFs = &SD;
+    nameStart = filename + 7;
+  }
+
   char path[48];
-  snprintf(path, sizeof(path), "/%s.bas", filename);
-  File f = LittleFS.open(path, "r");
+  if (!resolveExistingPath(*sourceFs, nameStart, path, sizeof(path)))
+  {
+    printError("* FILE ERROR");
+    return;
+  }
+  File f = sourceFs->open(path, "r");
   if (!f)
   {
     printError("* FILE ERROR");
@@ -2844,18 +2921,39 @@ static void cmdDelete(const char* filename)
     char label[56];
     if (dev == fio::DEV_FLASH)
     {
-      ok = LittleFS.exists(innerPath) && LittleFS.remove(innerPath);
-      snprintf(label, sizeof(label), "FLASH%s", innerPath);
+      // parseSpec gives us "/NAME"; strip the leading slash so the
+      // resolver can apply the smart .bas fallback when no extension
+      // was given.
+      char resolved[48];
+      const char* bare = (innerPath[0] == '/') ? innerPath + 1 : innerPath;
+      if (resolveExistingPath(LittleFS, bare, resolved, sizeof(resolved)))
+      {
+        ok = LittleFS.remove(resolved);
+        snprintf(label, sizeof(label), "FLASH%s", resolved);
+      }
+      else
+      {
+        snprintf(label, sizeof(label), "FLASH%s", innerPath);
+      }
     }
     else if (dev == fio::DEV_SD)
     {
-      if (!fio::g_sdOk)
+      if (!sdmgr::requireSD())
       {
         printError("* DEVICE NOT PRESENT");
         return;
       }
-      ok = SD.exists(innerPath) && SD.remove(innerPath);
-      snprintf(label, sizeof(label), "SDCARD%s", innerPath);
+      char resolved[48];
+      const char* bare = (innerPath[0] == '/') ? innerPath + 1 : innerPath;
+      if (resolveExistingPath(SD, bare, resolved, sizeof(resolved)))
+      {
+        ok = SD.remove(resolved);
+        snprintf(label, sizeof(label), "SDCARD%s", resolved);
+      }
+      else
+      {
+        snprintf(label, sizeof(label), "SDCARD%s", innerPath);
+      }
     }
     else if (dev == fio::DEV_DSK)
     {
@@ -2885,10 +2983,11 @@ static void cmdDelete(const char* filename)
     return;
   }
 
-  // Legacy: bare name → /NAME.bas on LittleFS (matches SAVE / OLD)
+  // Legacy: bare name → LittleFS, with smart .bas fallback so files
+  // with no extension also delete cleanly.
   char path[48];
-  snprintf(path, sizeof(path), "/%s.bas", filename);
-  if (!LittleFS.exists(path) || !LittleFS.remove(path))
+  if (!resolveExistingPath(LittleFS, filename, path, sizeof(path)) ||
+      !LittleFS.remove(path))
   {
     printError("* FILE ERROR");
     return;
@@ -2929,6 +3028,65 @@ static void loadMounts()
   f.close();
 }
 
+// --- sd_manager implementation -------------------------------------------
+// See sd_manager.h for the rationale. Lives in the .ino because it needs
+// to call loadMounts() (static here) and the SD library (which file_io
+// deliberately doesn't include — it's hardware-agnostic).
+namespace sdmgr
+{
+  bool requireSD()
+  {
+    // Fast path: already mounted on this boot. fio::g_sdOk is the
+    // single source of truth — invalidate() clears it to force a retry.
+    if (fio::g_sdOk) return true;
+
+    // Slow path: try to bring the card up. SPI is already configured
+    // by setup() so we don't reinit it. SD.end() is safe even if a
+    // previous begin failed — clears any half-mounted state from a
+    // stale handle so begin() starts fresh.
+    SD.end();
+    if (!SD.begin(/*cs=*/10, SPI) || SD.cardType() == CARD_NONE)
+    {
+      // No card present, or SD.begin() lied without a real card and
+      // cardType() caught it. Stay unmounted; caller emits its usual
+      // "device not present" error.
+      SD.end();
+      return false;
+    }
+
+    fio::setSDFs(&SD);
+    Serial.println("sdmgr: SD card mounted on demand.");
+    loadMounts();   // re-attach any DSK1..N persisted from a prior session
+    return true;
+  }
+
+  void invalidate()
+  {
+    if (!fio::g_sdOk) return;
+    Serial.println("sdmgr: SD invalidated — next access will retry mount.");
+    // Close any open file slots that were backed by SD, so the next
+    // operation against them gets a clean DEVICE NOT PRESENT instead
+    // of dereferencing a stale File handle.
+    for (int i = 1; i <= fio::MAX_FILES; i++)
+    {
+      if (fio::g_slots[i].inUse && fio::g_slots[i].device == fio::DEV_SD)
+      {
+        fio::closeFile(i);
+      }
+    }
+    // And any SD-backed DSK mounts.
+    for (int d = 1; d <= fio::MAX_DSK; d++)
+    {
+      if (fio::g_mounts[d].mounted && !fio::g_mounts[d].fromFlash)
+      {
+        fio::unmountDskImage(d);
+      }
+    }
+    SD.end();
+    fio::setSDFs(nullptr);
+  }
+}
+
 // MOUNT DSK<n> <spec>
 //   <spec> forms accepted:
 //     FLASH.FILE.DSK    — internal LittleFS
@@ -2943,6 +3101,13 @@ static void cmdMount(int drive, const char* imageName)
   {
     printError("* BAD DEVICE");
     return;
+  }
+  // If the spec routes to SD, mount the card first so the user doesn't
+  // have to type two commands ("insert card; MOUNT DSK1 SDCARD.FOO").
+  if (imageName &&
+      (strncasecmp(imageName, "SDCARD.", 7) == 0 || imageName[0] == '/'))
+  {
+    sdmgr::requireSD();
   }
   if (!fio::mountDskImage(drive, imageName))
   {
@@ -2981,7 +3146,7 @@ static void cmdNewDisk(const char* spec, const char* volName,
     printError("* BAD DEVICE");
     return;
   }
-  if (!fromFlash && !fio::g_sdOk)
+  if (!fromFlash && !sdmgr::requireSD())
   {
     printError("* DEVICE NOT PRESENT");
     return;
@@ -3073,19 +3238,42 @@ static void cmdUnmount(int drive)
 }
 
 // --- File I/O shims (wired into TokenParser via setFileCallbacks) ---
+// Per the FileOpenFn / FilePrintFn / FileReadLineFn contracts in
+// token_parser.h, these return 0 on success or a TI Extended BASIC
+// I/O error code (fio::TIIoError, 0..7) on failure. fio::toTIError()
+// does the mapping from fio's internal codes (1..6) to TI codes,
+// using the slot's device type to distinguish device-error vs
+// file-error for FS failures.
 static int shimFileOpen(int unit, const char* spec, int mode,
                         int flags, int recLen)
 {
-  return fio::openFile(unit, spec, (fio::Mode)mode, flags, recLen);
+  // If the spec targets SD (directly or via a DSK that's mounted on SD),
+  // make sure the card is mounted before fio sees the call. requireSD()
+  // is cheap when SD is already up and a one-shot mount attempt when not.
+  if (spec)
+  {
+    if (strncasecmp(spec, "SDCARD.", 7) == 0 ||
+        strncasecmp(spec, "DSK",     3) == 0)
+    {
+      sdmgr::requireSD();
+    }
+  }
+  int rc = fio::openFile(unit, spec, (fio::Mode)mode, flags, recLen);
+  return (rc == 0) ? 0 : fio::toTIError(rc, unit);
 }
 static int shimFileClose(int unit) { return fio::closeFile(unit); }
 static int shimFilePrint(int unit, const char* text)
 {
-  return fio::printLineTo(unit, text);
+  int rc = fio::printLineTo(unit, text);
+  return (rc == 0) ? 0 : fio::toTIError(rc, unit);
 }
 static int shimFileReadLine(int unit, char* buf, int bufSize)
 {
-  return fio::readLineFrom(unit, buf, bufSize);
+  int rc = fio::readLineFrom(unit, buf, bufSize);
+  // file_io returns 2 specifically for EOF — map to TI I/O ERROR 04.
+  if (rc == 0) return 0;
+  if (rc == 2) return fio::TI_IO_PAST_EOF;
+  return fio::toTIError(rc, unit);
 }
 static bool shimFileEof(int unit) { return fio::isEof(unit); }
 static bool shimFileSeekRec(int unit, long rec)
@@ -3183,7 +3371,7 @@ static void cmdDirOn(const char* device)
   const char* label = "FLASH";
   if (strcasecmp(device, "SDCARD") == 0 || strcasecmp(device, "SD") == 0)
   {
-    if (!fio::g_sdOk)
+    if (!sdmgr::requireSD())
     {
       printError("* DEVICE NOT PRESENT");
       return;
@@ -3637,15 +3825,17 @@ void setup()
   // The shared file_io is hardware-agnostic; we do SPI+SD here and hand
   // it the fs::FS to route SDCARD.* through.
   SPI.begin(/*sck=*/12, /*miso=*/13, /*mosi=*/11, /*cs=*/10);
-  if (SD.begin(/*cs=*/10, SPI))
+  // Let file_io tell sd_manager when an SD operation fails so a yanked
+  // card invalidates the cached mount and the next access re-probes
+  // instead of dereferencing a stale fs handle.
+  fio::setSDInvalidateCallback(sdmgr::invalidate);
+  // SD mount is lazy: sdmgr::requireSD() runs SD.begin() + cardType()
+  // and registers with fio + loads persisted mounts on success. Calling
+  // it here just gives the "card was in at boot" case its fast happy
+  // path; later accesses re-probe automatically when a card is inserted.
+  if (!sdmgr::requireSD())
   {
-    fio::setSDFs(&SD);
-    Serial.println("SD card mounted.");
-    loadMounts();   // auto-remount any persisted DSK images
-  }
-  else
-  {
-    Serial.println("SD card not present (DSK1..3 disabled).");
+    Serial.println("SD card not present (will retry on first access).");
   }
 
   initTokenNames();

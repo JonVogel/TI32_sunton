@@ -249,34 +249,105 @@ static void bleKbOnReport(const uint8_t* report, size_t len)
   memcpy(prevKeys, keys, 6);
 }
 
+// BLE keyboard scan policy. Two modes:
+//   TITLE      — aggressive scanning while the user sits on the title /
+//                splash screen. This is the moment a keyboard is most
+//                likely to be turned on, so we trade CPU for fast
+//                discovery. The application calls bleKbSetMode(BLE_KB_TITLE)
+//                at boot and bleKbSetMode(BLE_KB_INTERACTIVE) once the
+//                user dismisses the title.
+//   INTERACTIVE — radio idle when no keyboard is connected. If a
+//                previously-connected keyboard drops out, fire ONE
+//                low-duty-cycle background scan to try to reacquire it.
+//                Otherwise, stay quiet so the interpreter has full CPU.
+//                User can force pairing via the BOOT button or CALL PAIR.
+enum BleKbMode : uint8_t
+{
+  BLE_KB_TITLE       = 0,
+  BLE_KB_INTERACTIVE = 1
+};
+static BleKbMode bleKbMode = BLE_KB_TITLE;
+
+static inline void bleKbSetMode(BleKbMode m)
+{
+  if (bleKbMode == m) return;
+  bleKbMode = m;
+  if (m == BLE_KB_INTERACTIVE)
+  {
+    // Entering interactive mode: if nothing's connected and the title
+    // screen's scan didn't find anything, take the radio idle. The
+    // task tick below will reopen a background scan only if a bonded
+    // peer disconnects later.
+    if (!BleHidHost::isConnected())
+    {
+      BleHidHost::stopScan();
+      Serial.println("BleHidHost: interactive mode, radio idle");
+    }
+  }
+}
+
 static inline void bleKbInit()
 {
   BleHidHost::setReportCallback(bleKbOnReport);
   BleHidHost::begin("TI99-BASIC", "ti99basic");
+  // Boot in TITLE mode — the splash screen calls bleKbSetMode(INTERACTIVE)
+  // when the user dismisses it.
+  bleKbMode = BLE_KB_TITLE;
 }
 
 static inline void bleKbTask()
 {
   BleHidHost::task();
 
-  // Keyboards that drop into deep sleep re-advertise only briefly when
-  // a key is pressed; if our scanner isn't active at that exact
-  // moment, we miss the window and stay disconnected forever (until
-  // the user reboots or hits F12). Watchdog this: any time we're
-  // disconnected and not already in pairing mode for >5 s, kick off a
-  // pairing/scan window. Permissive pairing is fine for a toy.
-  static uint32_t disconnectAt = 0;
-  if (BleHidHost::isConnected() || BleHidHost::inPairingMode())
+  if (bleKbMode == BLE_KB_TITLE)
   {
-    disconnectAt = 0;
+    // While on the title screen, keep BleHidHost's scan alive so the
+    // user can power on their keyboard and have it connect during the
+    // splash. begin() opens a 5-second scan; if it expired without a
+    // hit, reopen it. We use the aggressive pairing-mode machinery
+    // because the user is sitting and waiting — fast discovery wins.
+    if (!BleHidHost::isConnected() &&
+        !BleHidHost::inPairingMode())
+    {
+      BleHidHost::requestSilentScan();
+    }
+    return;
   }
-  else if (disconnectAt == 0)
+
+  // INTERACTIVE mode: only re-engage the radio if a bonded peer was
+  // previously connected and just disconnected. Track that edge here
+  // so we don't keep firing if the user has never paired anything.
+  static bool wasConnected = false;
+  static uint32_t backgroundScanAt = 0;
+  bool nowConnected = BleHidHost::isConnected();
+
+  if (nowConnected)
   {
-    disconnectAt = millis();
+    wasConnected = true;
+    backgroundScanAt = 0;
+    return;
   }
-  else if (millis() - disconnectAt > 5000)
+
+  if (wasConnected && BleHidHost::hasBondedPeers() &&
+      !BleHidHost::inPairingMode())
   {
-    BleHidHost::requestPairingMode();
-    disconnectAt = 0;
+    // The keyboard we were talking to just went away. Open a single
+    // background-scan window. requestBackgroundScan uses 10% duty so
+    // the main loop stays responsive while we wait for the keyboard
+    // to come back. If the window expires without a reconnect, we
+    // stay idle — user can hit BOOT or CALL PAIR to re-engage.
+    if (backgroundScanAt == 0)
+    {
+      backgroundScanAt = millis();
+      BleHidHost::requestBackgroundScan(60000);
+    }
+    // Once the window expires, clear wasConnected so we don't try
+    // again until the next time something does connect+disconnect.
+    else if (!BleHidHost::inPairingMode() &&
+             millis() - backgroundScanAt > 60000)
+    {
+      wasConnected = false;
+      backgroundScanAt = 0;
+    }
   }
 }
