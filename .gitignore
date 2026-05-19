@@ -1,0 +1,16 @@
+# --- ESP-IDF generated ---
+build/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
+
+# --- Local debug artifacts ---
+*.log
+flash-log*.txt
+monitor-*.txt
+canvas.png
+
+# --- IDE ---
+.vscode/
+.idea/

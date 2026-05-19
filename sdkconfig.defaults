@@ -1,0 +1,65 @@
+# sdkconfig defaults — seeds the initial sdkconfig.
+# This file maps each setting back to either an arduino-cli FQBN value
+# or a tuning we couldn't reach from arduino-cli. Edit via
+# `idf.py menuconfig` after `idf.py reconfigure` and save back here if
+# the change should be permanent.
+#
+# Only edits to sdkconfig.defaults that aren't already in sdkconfig take
+# effect on reconfigure. To re-seed completely: `rm sdkconfig`.
+
+# --- Target + flash (FQBN: esp32:esp32:esp32s3, FlashSize=16M) ---
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# --- Partition table — carry over from arduino-cli build ---
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# --- PSRAM (FQBN: PSRAM=opi). 8048S043C has WROOM-1 N16R8 = 8 MB octal
+# at 1.8V. SPEED_80M matches arduino-esp32 default. Keep allocations
+# opt-in (USE_MALLOC=n) so internal DRAM is the default for small
+# allocations.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=n
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+
+# --- USB console (FQBN: CDCOnBoot=default). 8048S043C uses on-board
+# CH340 USB-UART bridge wired to UART0. Serial.print() routes through
+# the bridge, not native USB-Serial-JTAG.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# --- FATFS Long File Names — without this, SAVE "SDCARD.LONGNAME"
+# fails silently because FATFS truncates to 8.3.
+CONFIG_FATFS_LFN_HEAP=y
+
+# --- NimBLE host stack (used by BLE keyboard) ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+CONFIG_BT_NIMBLE_MAX_BONDS=4
+CONFIG_BT_NIMBLE_MAX_CCCDS=8
+# Mute NimBLE INFO chatter (BLE_INIT logs every scan/connect cycle).
+# CONFIG_BT_NIMBLE_LOG_LEVEL_INFO is not set
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
+# --- CPU + scheduling ---
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+
+# --- Arduino-as-component. With AUTOSTART_ARDUINO=y the Arduino layer
+# spins its own task that runs setup() then loop() repeatedly — same
+# lifecycle as the arduino-cli build. No hand-written app_main()
+# needed. LOOP_STACK matches arduino-cli's default.
+CONFIG_AUTOSTART_ARDUINO=y
+CONFIG_ARDUINO_RUNNING_CORE=1
+CONFIG_ARDUINO_EVENT_RUNNING_CORE=1
+CONFIG_ARDUINO_LOOP_STACK_SIZE=16384

@@ -1,0 +1,8 @@
+# Pulls in arduino-esp32 v3.3+ as an ESP-IDF managed component. Brings
+# Serial / delay / LittleFS / SD / Wire / Preferences / WiFi etc. plus
+# all the transitive IDF dependencies they need. arduino-cli's local
+# v2.0.18 install stays authoritative for the reference build on the
+# `main` branch but is NOT used by this IDF project.
+dependencies:
+  espressif/arduino-esp32:
+    version: "^3.3.1"
