@@ -25,7 +25,12 @@ idf_component_register(
         ble-hid-host       # BleHidHost (NimBLE multi-peer HID host)
         file-handling      # ESP32_File_Handling (LittleFS / SD / DSK)
         ti-font            # TI_Font (8x8 ROM font + logo)
-        # Arduino_GFX and NimBLE-Arduino are added in steps 4 and 5.
-        # Build is still expected to fail at this commit on missing
-        # Arduino_GFX_Library.h and NimBLE-Arduino headers.
+        # Third-party Arduino libraries (as IDF components under
+        # components/). JonVogel forks because upstream has no IDF
+        # support; the GFX fork only adds a CMakeLists.txt wrapper,
+        # the NimBLE-Arduino fork bundles the NimBLE stack to avoid a
+        # double-init collision with IDF's own NimBLE host (gotcha
+        # table in transfer.md).
+        Arduino_GFX
+        NimBLE-Arduino
 )

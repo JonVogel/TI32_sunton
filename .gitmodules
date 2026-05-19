@@ -14,3 +14,7 @@
 	path = components/Arduino_GFX
 	url = https://github.com/JonVogel/Arduino_GFX.git
 	branch = idf-port
+[submodule "components/NimBLE-Arduino"]
+	path = components/NimBLE-Arduino
+	url = https://github.com/JonVogel/NimBLE-Arduino.git
+	branch = idf-port
