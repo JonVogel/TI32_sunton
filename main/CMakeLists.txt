@@ -34,3 +34,17 @@ idf_component_register(
         Arduino_GFX
         NimBLE-Arduino
 )
+
+# IDF's toolchain promotes several warnings to errors that arduino-cli
+# leaves as warnings. We demote them here for the main translation
+# unit (which transitively pulls in the legacy submodule headers).
+#
+#   -Wreorder              ExecManager() initializers vs declaration order
+#                          in TI_Extended_Basic_Interpreter/exec_manager.h
+#   -Wformat-truncation    snprintf "%s" formats in token_parser.h and a
+#                          handful of message buffers in main.cpp where
+#                          worst-case input could exceed the destination
+target_compile_options(${COMPONENT_LIB} PRIVATE
+    -Wno-error=reorder
+    -Wno-error=format-truncation
+)

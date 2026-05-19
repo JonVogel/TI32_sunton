@@ -44,6 +44,16 @@ void tiYield()
   delay(1);
 }
 
+// Forward declarations.
+// The Arduino IDE auto-emits a forward decl for every function in a
+// .ino; plain C++ doesn't. These four are the ones called above their
+// definitions in this file — anything else is defined before its
+// first use in source order and doesn't need a forward decl.
+static void fillBackground(uint16_t bg);
+static bool editorBufferIsAutoFillOnly(const LineEdit& s);
+static void cmdOld(const char* filename);
+static void cmdDirOn(const char* device);
+
 // ---------------------------------------------------------------------------
 // ESP32-8048S043C (Sunton 4.3" 800x480 RGB) pin map
 // ---------------------------------------------------------------------------
