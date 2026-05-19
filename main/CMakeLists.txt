@@ -47,4 +47,9 @@ idf_component_register(
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error=reorder
     -Wno-error=format-truncation
+    # Arduino_GFX_Library.h (included by main.cpp) defines
+    # `virtual void Arduino_GFX::flush(bool)`, which "hides" Print::flush()
+    # in the base class chain. arduino-esp32 v2 didn't error on this
+    # via arduino-cli's flags; IDF's -Werror=overloaded-virtual does.
+    -Wno-error=overloaded-virtual
 )

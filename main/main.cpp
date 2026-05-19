@@ -34,11 +34,30 @@
 #include "line_editor.h"
 #include "sd_manager.h"
 
-// Strong override of the interpreter's weak yield hook (declared in
-// ti_platform.h as a free function). delay(1) blocks for one FreeRTOS
-// tick so the IDLE task can pet the watchdog; Arduino's yield() and
-// FreeRTOS's taskYIELD() only switch among same-or-higher-priority
-// tasks and won't satisfy CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_*.
+// Cooperative yield primitive used everywhere in this host. delay(1)
+// puts the calling task into Blocked for one FreeRTOS tick so the
+// lowest-priority IDLE task can run and pet the task watchdog.
+// Arduino's yield() and FreeRTOS's taskYIELD() only switch among
+// same-or-higher-priority tasks and won't satisfy
+// CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y.
+//
+// Three names that all do the same thing:
+//   yield()    - override of arduino-esp32's weak yield() (extern "C"
+//                so the framework's link-time name is the one we
+//                replace). Picks up implicit yields from String, Stream,
+//                file ops, etc.
+//   tiYield()  - strong override of the interpreter's weak hook
+//                (ti_platform.h, free function) — called from interpreter
+//                inner loops, BLE pairing waits, exec_manager line tail.
+//   We sprinkle yield() calls into host-side long-running loops in this
+//   file too (file save/load, screen redraw rows, DIR catalog, char
+//   waits). 133 raw loops exist; only the outer/slow ones need yields,
+//   the inner pixel/cell loops complete in microseconds.
+extern "C" void yield()
+{
+  delay(1);
+}
+
 void tiYield()
 {
   delay(1);
@@ -893,6 +912,7 @@ static void refreshScreen()
         prevScreenBuf[r][c] = screenBuf[r][c];
       }
     }
+    yield();
   }
 }
 
@@ -905,6 +925,7 @@ static void redrawScreen()
       drawCell(c, r);
       prevScreenBuf[r][c] = screenBuf[r][c];
     }
+    yield();
   }
 }
 
@@ -2766,6 +2787,7 @@ static void cmdSave(const char* filename)
     int n = snprintf(buf, sizeof(buf), "%d ", line->lineNum);
     detokenizeLine(line->tokens, line->length, &buf[n], sizeof(buf) - n);
     f.println(buf);
+    yield();
   }
   f.close();
 
@@ -2855,6 +2877,7 @@ static void cmdOld(const char* filename)
     {
       processInput(line.c_str());
     }
+    yield();
   }
   f.close();
 
@@ -2909,6 +2932,7 @@ static void cmdMerge(const char* filename)
       processInput(line.c_str());
       merged++;
     }
+    yield();
   }
   f.close();
 
@@ -3386,6 +3410,7 @@ static void cmdDirOn(const char* device)
       snprintf(buf, sizeof(buf), "%-10s %c %-10s %4d",
                e.name, lock, typeStr, e.totalSectors);
       catPrintLine(buf);
+      yield();
     }
     if (n == 0) catPrintLine("  (empty)");
     return;
@@ -3431,6 +3456,7 @@ static void cmdDirOn(const char* device)
       shown++;
     }
     f = root.openNextFile();
+    yield();
   }
   if (shown == 0) catPrintLine("  (no files)");
 }
@@ -3983,4 +4009,14 @@ void loop()
     tft->flush();
     lastFlush = now;
   }
+
+  // Cooperative yield. Under ESP-IDF with
+  // CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y, hot-looping here
+  // starves IDLE1 and the task watchdog fires every 5 s — its print
+  // burst trashes a frame on the RGB panel. Arduino's yield() and
+  // FreeRTOS's taskYIELD() don't help (same-or-higher priority only);
+  // delay(1) parks loopTask for one tick so IDLE1 runs and pets the
+  // dog. arduino-cli's v2.0.18 build didn't surface this because that
+  // build didn't enable both IDLE-task WDT checks.
+  delay(1);
 }
