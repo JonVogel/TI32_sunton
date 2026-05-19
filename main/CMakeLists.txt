@@ -17,9 +17,15 @@ idf_component_register(
         # we wrap that with the local components/arduino/ shim so we
         # can reference it as the short name "arduino".
         arduino
-        # Arduino_GFX, NimBLE-Arduino, and the 4 legacy host-shared
-        # libraries (TI_Extended_Basic_Interpreter, BleHidHost,
-        # ESP32_File_Handling, TI_Font) get wired in by the NEXT commit
-        # as IDF-component wrappers. Build is intentionally not green
-        # at this commit — that's step 3.
+        # The 4 legacy host-shared libraries, each wrapped as an IDF
+        # component by a CMakeLists.txt under components/ that points
+        # back into the submodule dir at repo root. Submodules stay
+        # untouched. See components/<name>/CMakeLists.txt for each.
+        interpreter        # TI_Extended_Basic_Interpreter (BASIC engine)
+        ble-hid-host       # BleHidHost (NimBLE multi-peer HID host)
+        file-handling      # ESP32_File_Handling (LittleFS / SD / DSK)
+        ti-font            # TI_Font (8x8 ROM font + logo)
+        # Arduino_GFX and NimBLE-Arduino are added in steps 4 and 5.
+        # Build is still expected to fail at this commit on missing
+        # Arduino_GFX_Library.h and NimBLE-Arduino headers.
 )
