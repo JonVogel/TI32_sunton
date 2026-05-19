@@ -47,9 +47,13 @@ public:
   int16_t   width()  const { return _w; }
   int16_t   height() const { return _h; }
 
-  // Trigger swap on next vsync. After the call, backBuffer() points
-  // at the OLD front (now scheduled to become back). Returns true.
-  bool commitFrame();
+  // Trigger swap on next vsync, then sync only the [dx0,dy0..dx1,dy1]
+  // dirty rectangle (inclusive) from the new front to the new back so
+  // partial updates next frame have a coherent base. Pass an empty
+  // bbox (dx1<dx0 or dy1<dy0) to skip the memcpy entirely. The full-
+  // screen overload covers callers that haven't tracked dirty regions.
+  bool commitFrame(int16_t dx0, int16_t dy0, int16_t dx1, int16_t dy1);
+  bool commitFrame() { return commitFrame(0, 0, _w - 1, _h - 1); }
 
 private:
   int8_t _de, _vsync, _hsync, _pclk;
@@ -72,6 +76,12 @@ private:
   uint16_t* _backFb  = nullptr;
   uint16_t* _frontFb = nullptr;
   int16_t   _w = 0, _h = 0;
+  // Vsync semaphore: given by an ISR registered with the panel
+  // driver. commitFrame() waits on it between draw_bitmap (which
+  // schedules the swap) and the front->back memcpy. Without the
+  // wait, the memcpy raced the still-scanning old front buffer and
+  // sprites showed visible tear lines.
+  SemaphoreHandle_t _vsyncSem = nullptr;
 };
 
 
@@ -104,6 +114,34 @@ private:
   int16_t   _w, _h;
   uint8_t   _rotation = 0;
   size_t    _fbBytes = 0;
+  // Dirty rectangle in FB coordinates (post-rotation), inclusive
+  // bounds. Drawing primitives expand this; flush() passes it to
+  // commitFrame so only the changed region is memcpy'd. Empty when
+  // _dx1 < _dx0 or _dy1 < _dy0. The 32x24 cell screen with one
+  // moving sprite has bbox ~ 64x64 px = 8 KB memcpy instead of
+  // the full 768 KB, the difference between ~30 ms commits and
+  // ~1 ms commits.
+  int16_t   _dx0 = 0, _dy0 = 0;
+  int16_t   _dx1 = -1, _dy1 = -1;
+  inline void markDirty(int16_t x0, int16_t y0, int16_t x1, int16_t y1)
+  {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= _w) x1 = _w - 1;
+    if (y1 >= _h) y1 = _h - 1;
+    if (x0 > x1 || y0 > y1) return;
+    if (_dx1 < _dx0)  // empty -> set
+    {
+      _dx0 = x0; _dy0 = y0; _dx1 = x1; _dy1 = y1;
+    }
+    else  // union
+    {
+      if (x0 < _dx0) _dx0 = x0;
+      if (y0 < _dy0) _dy0 = y0;
+      if (x1 > _dx1) _dx1 = x1;
+      if (y1 > _dy1) _dy1 = y1;
+    }
+  }
 };
 
 #endif // ESP32S3

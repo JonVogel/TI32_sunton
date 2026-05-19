@@ -134,6 +134,24 @@ bool Arduino_ESP32RGBPanelDB::begin(int16_t w, int16_t h)
   if (esp_lcd_panel_reset(_panel_handle) != ESP_OK)                    return false;
   if (esp_lcd_panel_init(_panel_handle) != ESP_OK)                     return false;
 
+  // Register a vsync ISR callback that gives our semaphore.
+  // commitFrame takes this between draw_bitmap and the front->back
+  // memcpy so the memcpy never writes into a buffer the panel is
+  // still scanning.
+  _vsyncSem = xSemaphoreCreateBinary();
+  if (!_vsyncSem) return false;
+  esp_lcd_rgb_panel_event_callbacks_t cbs = {};
+  cbs.on_vsync = [](esp_lcd_panel_handle_t, const esp_lcd_rgb_panel_event_data_t*, void* user_ctx) -> bool
+  {
+    BaseType_t hpwoken = pdFALSE;
+    xSemaphoreGiveFromISR((SemaphoreHandle_t)user_ctx, &hpwoken);
+    return hpwoken == pdTRUE;
+  };
+  if (esp_lcd_rgb_panel_register_event_callbacks(_panel_handle, &cbs, _vsyncSem) != ESP_OK)
+  {
+    return false;
+  }
+
   // esp_lcd_rgb_panel_get_frame_buffer is VARIADIC: the fb_num arg
   // is the count of out-pointer args that follow. Pass 2 with both
   // pointers in one call. (Two separate calls with `2, &fb` would
@@ -156,7 +174,8 @@ bool Arduino_ESP32RGBPanelDB::begin(int16_t w, int16_t h)
   return true;
 }
 
-bool Arduino_ESP32RGBPanelDB::commitFrame()
+bool Arduino_ESP32RGBPanelDB::commitFrame(int16_t dx0, int16_t dy0,
+                                          int16_t dx1, int16_t dy1)
 {
   if (!_panel_handle || !_backFb) return false;
 
@@ -166,7 +185,15 @@ bool Arduino_ESP32RGBPanelDB::commitFrame()
 
   // Trigger swap on next vsync. Passing the back-buffer pointer
   // tells the driver "no copy needed, just present this buffer".
+  // Returns immediately; the actual buffer switch happens at the
+  // next vsync edge.
   esp_lcd_panel_draw_bitmap(_panel_handle, 0, 0, _w, _h, _backFb);
+
+  // Block until the vsync ISR fires. Without this, the panel is
+  // still scanning the OLD front buffer — which we're about to
+  // relabel as our new back. Writing to it during scanout produced
+  // the tearing/flicker the user originally reported.
+  xSemaphoreTake(_vsyncSem, portMAX_DELAY);
 
   // Update our pointer tracking. The buffer we just committed is
   // now the new front; the old front becomes the new back.
@@ -174,12 +201,40 @@ bool Arduino_ESP32RGBPanelDB::commitFrame()
   _frontFb = _backFb;
   _backFb  = tmp;
 
-  // Pre-fill the new back from the new front so partial updates next
-  // frame don't reveal stale content from 2 frames ago. This memcpy
-  // is the dominant cost (~10 ms for 800x480x2 in PSRAM); without
-  // it, anything we don't redraw shows up wrong.
-  memcpy(_backFb, _frontFb, bytes);
-  Cache_WriteBack_Addr((uint32_t)_backFb, bytes);
+  // Sync the dirty rectangle from new front to new back so partial
+  // updates next frame have a coherent base. Empty bbox => skip the
+  // memcpy entirely (idle frames cost only the swap + vsync wait).
+  if (dx0 <= dx1 && dy0 <= dy1)
+  {
+    if (dx0 < 0) dx0 = 0;
+    if (dy0 < 0) dy0 = 0;
+    if (dx1 >= _w) dx1 = _w - 1;
+    if (dy1 >= _h) dy1 = _h - 1;
+    int16_t rectW = dx1 - dx0 + 1;
+    if (dx0 == 0 && dx1 == _w - 1)
+    {
+      // Full-width: one big memcpy of the row range.
+      size_t rowBytes = (size_t)_w * sizeof(uint16_t);
+      memcpy(&_backFb[(size_t)dy0 * _w], &_frontFb[(size_t)dy0 * _w],
+             rowBytes * (size_t)(dy1 - dy0 + 1));
+    }
+    else
+    {
+      size_t stride = (size_t)rectW * sizeof(uint16_t);
+      for (int16_t yy = dy0; yy <= dy1; yy++)
+      {
+        memcpy(&_backFb[(size_t)yy * _w + dx0],
+               &_frontFb[(size_t)yy * _w + dx0],
+               stride);
+      }
+    }
+    // Cache-flush only the region we wrote — narrower than the full FB.
+    // Per-row would be too many small flushes; a single span over the
+    // bbox rows is good enough (cache lines are 32 B so even narrow
+    // rects touch full cache lines).
+    Cache_WriteBack_Addr((uint32_t)&_backFb[(size_t)dy0 * _w],
+                         (size_t)(dy1 - dy0 + 1) * _w * sizeof(uint16_t));
+  }
   return true;
 }
 
@@ -225,6 +280,7 @@ void RGBDisplayDB::fillScreen(uint16_t color)
   // Fast path: solid color, no rotation needed.
   size_t total = (size_t)_w * _h;
   for (size_t i = 0; i < total; i++) _fb[i] = color;
+  markDirty(0, 0, _w - 1, _h - 1);
 }
 
 void RGBDisplayDB::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
@@ -256,6 +312,7 @@ void RGBDisplayDB::fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
       row[xx] = color;
     }
   }
+  markDirty(x0, y0, x1, y1);
 }
 
 void RGBDisplayDB::draw16bitRGBBitmap(int16_t x, int16_t y,
@@ -283,9 +340,15 @@ void RGBDisplayDB::draw16bitRGBBitmap(int16_t x, int16_t y,
       uint16_t* src = &bitmap[(srcYOff + yy) * w + srcXOff];
       memcpy(dst, src, copyW * sizeof(uint16_t));
     }
+    markDirty(x0, y0, x1, y1);
     return;
   }
   // Rotation 2: write each src pixel at (W-1-(x+sx), H-1-(y+sy)).
+  // Compute the post-rotation bbox once for dirty tracking.
+  int16_t bx0 = _w - 1 - (x + w - 1);
+  int16_t by0 = _h - 1 - (y + h - 1);
+  int16_t bx1 = _w - 1 - x;
+  int16_t by1 = _h - 1 - y;
   for (int16_t sy = 0; sy < h; sy++)
   {
     for (int16_t sx = 0; sx < w; sx++)
@@ -297,6 +360,7 @@ void RGBDisplayDB::draw16bitRGBBitmap(int16_t x, int16_t y,
       _fb[ty * _w + tx] = bitmap[sy * w + sx];
     }
   }
+  markDirty(bx0, by0, bx1, by1);
 }
 
 void RGBDisplayDB::writePixel(int16_t x, int16_t y, uint16_t color)
@@ -305,13 +369,20 @@ void RGBDisplayDB::writePixel(int16_t x, int16_t y, uint16_t color)
   int16_t tx = x, ty = y;
   if (!xform(tx, ty, _w, _h, _rotation)) return;
   _fb[ty * _w + tx] = color;
+  markDirty(tx, ty, tx, ty);
 }
 
 void RGBDisplayDB::flush()
 {
   if (!_panel) return;
-  _panel->commitFrame();
+  // Pass the dirty bbox so commitFrame's memcpy only copies the
+  // changed region (not the full 768 KB). For a single moving sprite
+  // the bbox is ~64x64 px = 8 KB, ~1 ms instead of ~15 ms.
+  _panel->commitFrame(_dx0, _dy0, _dx1, _dy1);
   _fb = _panel->backBuffer();
+  // Reset bbox to empty.
+  _dx0 = 0; _dy0 = 0;
+  _dx1 = -1; _dy1 = -1;
 }
 
 #endif // ESP32S3
