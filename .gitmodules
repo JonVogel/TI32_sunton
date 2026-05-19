@@ -10,3 +10,7 @@
 [submodule "TI_Font"]
 	path = TI_Font
 	url = https://github.com/JonVogel/TI_Font.git
+[submodule "components/Arduino_GFX"]
+	path = components/Arduino_GFX
+	url = https://github.com/JonVogel/Arduino_GFX.git
+	branch = idf-port
