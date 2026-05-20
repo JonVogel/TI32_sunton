@@ -39,6 +39,30 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 # fails silently because FATFS truncates to 8.3.
 CONFIG_FATFS_LFN_HEAP=y
 
+# --- WiFi static pool tuning. Defaults reserve 10 RX / 32 TX buffers,
+# sized for a high-bandwidth station. This project is a single-client
+# local file manager; trimming the static pool gets ~30 KB of DRAM back
+# without measurable impact on the small HTTP / WebSocket workloads.
+# AMPDU off because we don't aggregate frames at our traffic volume —
+# the aggregation tables also cost DRAM.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+
+# --- lwIP tuning. 8 sockets is enough for: 1 active HTTP client,
+# 2 AsyncTCP pool sockets, mDNS, DHCP renew, and a small headroom.
+# Smaller TCP window + send buffer because file uploads are bursts at
+# LAN speed where window scaling doesn't gate throughput. TCPIP task
+# stack at 2560 fits within our DRAM budget; bump to 3072 if any
+# "Stack canary watchpoint triggered (tiT)" panics surface.
+CONFIG_LWIP_MAX_SOCKETS=8
+CONFIG_LWIP_TCP_WND_DEFAULT=4096
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=4096
+CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=2560
+
 # --- NimBLE host stack (used by BLE keyboard) ---
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
