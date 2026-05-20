@@ -35,6 +35,7 @@
 #include "sprites.h"
 #include "line_editor.h"
 #include "sd_manager.h"
+#include "web_files.h"     // webfiles::init / tick — LAN HTTP file manager
 
 // Cooperative yield primitive used everywhere in this host. delay(1)
 // puts the calling task into Blocked for one FreeRTOS tick so the
@@ -3981,6 +3982,11 @@ void setup()
   // shows. BASIC's CALL WIFI reports the resulting state via WiFi.status().
   tiWifiOn();
 
+  // Start the HTTP file manager. The server listens on port 80
+  // regardless of WiFi state; it only becomes reachable once we have
+  // an IP. Step 4a stub — actual routes wired in step 4b.
+  webfiles::init();
+
   // Bring up BLE HID keyboard input BEFORE the boot screen so the scan
   // can start reconnecting while the user is still on the splash screens.
   // (F12 or BOOT button = pairing mode.)
@@ -4066,6 +4072,7 @@ void loop()
   bleKbTask();
   spriteTick();
   checkInput();
+  webfiles::tick();
 
   if (inputReady)
   {

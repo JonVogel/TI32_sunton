@@ -9,6 +9,7 @@ idf_component_register(
     SRCS
         "main.cpp"
         "rgb_db.cpp"
+        "web_files.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         # Arduino layer (added via idf_component.yml) gives us Serial,
@@ -30,9 +31,12 @@ idf_component_register(
         # support; the GFX fork only adds a CMakeLists.txt wrapper,
         # the NimBLE-Arduino fork bundles the NimBLE stack to avoid a
         # double-init collision with IDF's own NimBLE host (gotcha
-        # table in transfer.md).
+        # table in transfer.md). AsyncTCP / ESPAsyncWebServer power
+        # the web file manager (web_files.cpp).
         Arduino_GFX
         NimBLE-Arduino
+        AsyncTCP
+        ESPAsyncWebServer
 )
 
 # IDF's toolchain promotes several warnings to errors that arduino-cli

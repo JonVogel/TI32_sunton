@@ -17,3 +17,15 @@ add_compile_definitions(
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(ti-extended-basic-esp32)
+
+# IDF v5.5's toolchain promotes -Wno-overloaded-virtual to -Werror by
+# default. Multiple Arduino-style libraries we depend on (NimBLE-Arduino,
+# Arduino_GFX, possibly AsyncTCP / ESPAsyncWebServer) define methods
+# that hide same-named overloads in arduino-esp32's Print/Stream base
+# classes — Print::flush, Print::availableForWrite, etc.
+#
+# idf_build_set_property(... APPEND) is the IDF-idiomatic way to add a
+# compile flag to every component built by the project. add_compile_options
+# alone doesn't propagate to IDF components because they set up their
+# own per-component flag lists. Must be called AFTER project().
+idf_build_set_property(COMPILE_OPTIONS "-Wno-error=overloaded-virtual" APPEND)

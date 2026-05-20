@@ -18,3 +18,11 @@
 	path = components/NimBLE-Arduino
 	url = https://github.com/JonVogel/NimBLE-Arduino.git
 	branch = idf-port
+[submodule "components/AsyncTCP"]
+	path = components/AsyncTCP
+	url = https://github.com/JonVogel/AsyncTCP.git
+	branch = idf-port
+[submodule "components/ESPAsyncWebServer"]
+	path = components/ESPAsyncWebServer
+	url = https://github.com/JonVogel/ESPAsyncWebServer.git
+	branch = idf-port
