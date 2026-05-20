@@ -25,6 +25,8 @@
 #include <LittleFS.h>
 #include <SD.h>
 #include <SPI.h>
+#include <WiFi.h>          // CALL WIFI host overrides (station mode + status)
+#include <Preferences.h>   // persistent NVS storage for WiFi credentials
 #include "rgb_db.h"
 #include "ti_font.h"
 #include "ble_keyboard.h"
@@ -61,6 +63,77 @@ extern "C" void yield()
 void tiYield()
 {
   delay(1);
+}
+
+// ---------------------------------------------------------------------------
+// CALL WIFI — host overrides of the interpreter's weak tiWifi* hooks.
+// ---------------------------------------------------------------------------
+//
+// Architecture in three layers:
+//   - The interpreter (ti_platform.h) declares tiWifiSet/Forget/Status/On/Off
+//     as plain free functions, with weak no-op fallbacks in ti_platform.cpp.
+//   - BASIC's CALL WIFI tokens in token_parser.h dispatch to those functions.
+//   - This file provides strong overrides — same names, no weak attribute —
+//     so the linker prefers ours.
+//
+// Credentials live in NVS under the "tiwifi" namespace. We do NOT call
+// nvs_flash_init() ourselves; the Arduino framework's setup() task
+// initializes NVS before our setup() runs (CONFIG_AUTOSTART_ARDUINO=y).
+//
+// WiFi.begin() is non-blocking — connection completes in a background
+// task. tiWifiStatus() reports the current state so BASIC programs can
+// poll for the ONLINE transition rather than block boot on it.
+static Preferences g_wifiPrefs;
+
+void tiWifiSet(const char* ssid, const char* pass)
+{
+  if (!ssid) { return; }
+  g_wifiPrefs.begin("tiwifi", false);
+  g_wifiPrefs.putString("ssid", ssid);
+  g_wifiPrefs.putString("pass", pass ? pass : "");
+  g_wifiPrefs.end();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, pass ? pass : "");
+}
+
+void tiWifiForget()
+{
+  g_wifiPrefs.begin("tiwifi", false);
+  g_wifiPrefs.clear();
+  g_wifiPrefs.end();
+  WiFi.disconnect(true /*wifioff*/, true /*eraseAP*/);
+}
+
+void tiWifiStatus(char* out, int outSize)
+{
+  if (!out || outSize < 1) { return; }
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    snprintf(out, outSize, "ONLINE %s", WiFi.localIP().toString().c_str());
+  }
+  else
+  {
+    snprintf(out, outSize, "OFFLINE");
+  }
+}
+
+void tiWifiOn()
+{
+  g_wifiPrefs.begin("tiwifi", true /*readOnly*/);
+  String ssid = g_wifiPrefs.getString("ssid", "");
+  String pass = g_wifiPrefs.getString("pass", "");
+  g_wifiPrefs.end();
+  if (ssid.length() > 0)
+  {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid.c_str(), pass.c_str());
+  }
+}
+
+void tiWifiOff()
+{
+  WiFi.disconnect(true /*wifioff*/);
+  WiFi.mode(WIFI_OFF);
 }
 
 // Forward declarations.
@@ -3901,6 +3974,12 @@ void setup()
   }
 
   tiClearScreen();
+
+  // Auto-reconnect WiFi if credentials are stored in NVS. Non-blocking:
+  // tiWifiOn returns immediately after WiFi.begin schedules the connect;
+  // the connection completes in the background while the boot screen
+  // shows. BASIC's CALL WIFI reports the resulting state via WiFi.status().
+  tiWifiOn();
 
   // Bring up BLE HID keyboard input BEFORE the boot screen so the scan
   // can start reconnecting while the user is still on the splash screens.
