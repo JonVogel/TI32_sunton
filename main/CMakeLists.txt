@@ -9,7 +9,6 @@ idf_component_register(
     SRCS
         "main.cpp"
         "rgb_db.cpp"
-        "web_files.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         # Arduino layer (added via idf_component.yml) gives us Serial,
@@ -23,9 +22,9 @@ idf_component_register(
         # back into the submodule dir at repo root. Submodules stay
         # untouched. See components/<name>/CMakeLists.txt for each.
         interpreter        # TI_Extended_Basic_Interpreter (BASIC engine)
-        ble-hid-host       # BleHidHost (NimBLE multi-peer HID host)
-        file-handling      # ESP32_File_Handling (LittleFS / SD / DSK)
-        ti-font            # TI_Font (8x8 ROM font + logo)
+        ble_hid_host       # BleHidHost (NimBLE multi-peer HID host)
+        file_handling      # ESP32_File_Handling (LittleFS / SD / DSK)
+        ti_font            # TI_Font (8x8 ROM font + logo)
         # Third-party Arduino libraries (as IDF components under
         # components/). JonVogel forks because upstream has no IDF
         # support; the GFX fork only adds a CMakeLists.txt wrapper,
@@ -37,6 +36,12 @@ idf_component_register(
         NimBLE-Arduino
         AsyncTCP
         ESPAsyncWebServer
+        # Shared HTTP file manager (JonVogel/TI_Web_Files_ESP). Brings
+        # webfiles::init / tick / setBusy. The library has its own
+        # transitive deps on AsyncTCP + ESPAsyncWebServer + arduino +
+        # file_handling + interpreter, but PRIV_REQUIRES wants the
+        # direct ones too so we list AsyncTCP/ESPAsyncWebServer above.
+        web_files
 )
 
 # IDF's toolchain promotes several warnings to errors that arduino-cli
