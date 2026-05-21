@@ -39,36 +39,41 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 # fails silently because FATFS truncates to 8.3.
 CONFIG_FATFS_LFN_HEAP=y
 
-# --- WiFi static pool tuning. Defaults reserve 10 RX / 32 TX buffers,
-# sized for a high-bandwidth station. This project is a single-client
-# local file manager; trimming the static pool gets ~30 KB of DRAM back
-# without measurable impact on the small HTTP / WebSocket workloads.
-# AMPDU off because we don't aggregate frames at our traffic volume —
-# the aggregation tables also cost DRAM.
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
-CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=6
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
+# --- WiFi static pool tuning (aggressive). Profile: a single web
+# client at a time and 1-2 BLE peers, so the WiFi pool can run very
+# small. WPA2 reconnect still needs internal DRAM for AES contexts —
+# previous (6/6/8/8) sizing crashed the BT/WiFi crypto path when
+# AsyncWebServer.begin() loaded the lwIP/AsyncTCP buffers on top.
+# Cutting to (4/4/4/4) frees ~12 KB internal DRAM for crypto headroom.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=4
 CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
 CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 
-# --- lwIP tuning. 8 sockets is enough for: 1 active HTTP client,
-# 2 AsyncTCP pool sockets, mDNS, DHCP renew, and a small headroom.
-# Smaller TCP window + send buffer because file uploads are bursts at
-# LAN speed where window scaling doesn't gate throughput. TCPIP task
-# stack at 2560 fits within our DRAM budget; bump to 3072 if any
-# "Stack canary watchpoint triggered (tiT)" panics surface.
-CONFIG_LWIP_MAX_SOCKETS=8
+# --- lwIP tuning. 4 sockets is enough for 1 HTTP listen + 1 accept +
+# 1 DHCP renew + small headroom. OOSEQ and SACK both disabled — saves
+# ~2.5 KB of reassembly buffers we never use at LAN speeds where
+# packets arrive in order. TCP window/send still 4 KB (LAN-speed
+# bursts don't benefit from window scaling).
+CONFIG_LWIP_MAX_SOCKETS=4
 CONFIG_LWIP_TCP_WND_DEFAULT=4096
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=4096
 CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=2560
+# CONFIG_LWIP_TCP_QUEUE_OOSEQ is not set
+# CONFIG_LWIP_TCP_SACK_OUT is not set
 
-# --- NimBLE host stack (used by BLE keyboard) ---
+# --- NimBLE host stack (used by BLE keyboard). Profile: 1-2 active
+# peers (keyboard + occasional gamepad), so MAX_CONNECTIONS=2 stands.
+# Bonds dropped 4 -> 2 and CCCDs 8 -> 4 since each ProtoArc L75 only
+# needs one slot; freeing the rest gives the controller more crypto
+# headroom for simultaneous WiFi WPA2 reconnect events.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
-CONFIG_BT_NIMBLE_MAX_BONDS=4
-CONFIG_BT_NIMBLE_MAX_CCCDS=8
+CONFIG_BT_NIMBLE_MAX_BONDS=2
+CONFIG_BT_NIMBLE_MAX_CCCDS=4
 # Mute NimBLE INFO chatter (BLE_INIT logs every scan/connect cycle).
 # CONFIG_BT_NIMBLE_LOG_LEVEL_INFO is not set
 CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
