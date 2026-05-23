@@ -28,6 +28,7 @@
 #include <WiFi.h>          // CALL WIFI host overrides (station mode + status)
 #include <Preferences.h>   // persistent NVS storage for WiFi credentials
 #include <esp_log.h>       // esp_log_level_set — silence WiFi/BT spam
+#include <esp_heap_caps.h> // heap_caps_get_free_size — DRAM budget probes
 #include <esp_wifi.h>      // esp_wifi_set_ps — stronger than WiFi.setSleep
 #include <esp_coexist.h>   // esp_coex_preference_set — BT vs WiFi arbiter
 #include "rgb_db.h"
@@ -3965,9 +3966,9 @@ void setup()
   // esp_coex_preference_set) but BT/WiFi coexistence forces it back on
   // when BT is doing crypto. The spam is benign but drowns out useful
   // log lines. Setting "wifi" tag to ERROR hides both INFO and WARN.
-  // The "BLE_INIT: Malloc failed" line is a transient BT coexistence
-  // event during pairing crypto — keep BLE_INIT at WARN so we still
-  // see real BT errors.
+  // BLE_INIT stays at WARN — "BLE_INIT: Malloc failed" is NOT benign:
+  // when that fires during pairing the keyboard drops with reason=534
+  // and won't reconnect until reboot. We want to see it.
   esp_log_level_set("wifi",     ESP_LOG_ERROR);
   esp_log_level_set("NimBLE",   ESP_LOG_WARN);
   esp_log_level_set("BLE_INIT", ESP_LOG_WARN);
@@ -4017,22 +4018,50 @@ void setup()
 
   tiClearScreen();
 
+  // DRAM-budget probe helper. The BT controller's pairing-time crypto
+  // allocations come from internal DRAM and aren't covered by
+  // CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST; if internal DRAM gets thin,
+  // pairing fails with "BLE_INIT: Malloc failed" and the keyboard drops
+  // (reason=534) until reboot. These probes let us see where the budget
+  // actually goes so we can target the right config knob.
+  auto heapProbe = [](const char* tag) {
+    size_t free_int = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t free_psr = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t lblk_int = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    Serial.printf("[heap] %-22s  int=%u (largest=%u)  psram=%u\n",
+                  tag, (unsigned)free_int, (unsigned)lblk_int,
+                  (unsigned)free_psr);
+  };
+
+  heapProbe("pre-WiFi");
+
   // Auto-reconnect WiFi if credentials are stored in NVS. Non-blocking:
   // tiWifiOn returns immediately after WiFi.begin schedules the connect;
   // the connection completes in the background while the boot screen
   // shows. BASIC's CALL WIFI reports the resulting state via WiFi.status().
   tiWifiOn();
 
+  heapProbe("post-WiFi");
+
   // Start the HTTP file manager. The library handles all routes; we
   // just hand in our SD instance so /api/files /api/file /api/upload
   // can serve SDCARD as well as FLASH (the 8048S043C uses SPI-mode SD,
   // contrast Box-3's SD_MMC). Pass nullptr to disable SDCARD support.
+  // (We tried reordering bleKbInit() before this to give the BT
+  // controller first crack at internal DRAM; that crashed the panic
+  // handler — TG1WDT fired inside panic_enable_cache before any UART
+  // output landed — so we're back to original order while we measure
+  // the actual DRAM budget via heapProbe and pick a different lever.)
   webfiles::init(&SD);
+
+  heapProbe("post-webfiles");
 
   // Bring up BLE HID keyboard input BEFORE the boot screen so the scan
   // can start reconnecting while the user is still on the splash screens.
   // (F12 or BOOT button = pairing mode.)
   bleKbInit();
+
+  heapProbe("post-BLE");
 
   // Show TI boot screen and wait for a key
   showBootScreen();

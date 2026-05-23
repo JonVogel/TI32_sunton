@@ -79,15 +79,41 @@ CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
 CONFIG_BT_NIMBLE_MAX_BONDS=2
 CONFIG_BT_NIMBLE_MAX_CCCDS=4
-# Push BT controller allocations into PSRAM where they don't compete
-# with WiFi / lwIP for the precious internal DRAM pool. Without this,
-# every BLE LE Secure Connections pairing triggers an internal-DRAM
-# alloc that fails ("E BLE_INIT: Malloc failed"), the keyboard drops
-# with reason=534 (no HID service), and the pairing-retry storm leaves
-# the radio in coexistence-throttled state for the rest of the boot.
-# Slight added BT latency since PSRAM is slower than DRAM, but pairing
-# isn't latency-critical and the alternative is "BLE doesn't work".
+
+# Move NimBLE host's DYNAMIC allocations to PSRAM. Without this, the
+# pairing-time crypto contexts (ECDH key pair, AES contexts, security
+# DB entry) land in internal DRAM and trip "E BLE_INIT: Malloc failed"
+# during HID service registration AFTER successful authentication. The
+# keyboard then reports connected but no HID service is bound and no
+# keystrokes arrive. Heap probe data: post-BLE init the largest free
+# INTERNAL block is only ~7.5 KB (matches MSYS_2 pool = 24*320=7680
+# exactly — that pool fragments the heap), and HID service registration
+# needs a single >7.5 KB allocation. CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST
+# (kept below) only covers the BT *controller* allocations, not NimBLE
+# host. _EXTERNAL routes NimBLE through PSRAM where 6.8 MB is free.
+# Latency penalty is negligible for the HID host workload.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+# CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL is not set
+
+# Shrink NimBLE static pools for a HID-only profile. Defaults are sized
+# for general-purpose BLE (24 ACL slots, 30 evt slots, 64 prep entries,
+# 12-entry whitelist). HID keyboards are low-bandwidth and we only ever
+# bond 2 peers, so most of that is dead weight burning internal DRAM
+# (these pools are statically allocated in BSS, not in PSRAM heap, so
+# even with _EXTERNAL above we still want them small).
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=8
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=12
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=12
+CONFIG_BT_NIMBLE_WHITELIST_SIZE=4
+CONFIG_BT_NIMBLE_ATT_MAX_PREP_ENTRIES=4
+CONFIG_BT_NIMBLE_GATT_MAX_PROCS=2
+
+# Push BT *controller* allocations into PSRAM too. With BT_NIMBLE_MEM_
+# ALLOC_MODE_EXTERNAL above this is somewhat redundant for routine
+# allocations but the controller has its own coexistence buffer path
+# that this setting governs separately.
 CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
+
 # Mute NimBLE INFO chatter (BLE_INIT logs every scan/connect cycle).
 # CONFIG_BT_NIMBLE_LOG_LEVEL_INFO is not set
 CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
