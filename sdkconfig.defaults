@@ -79,6 +79,15 @@ CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
 CONFIG_BT_NIMBLE_MAX_BONDS=2
 CONFIG_BT_NIMBLE_MAX_CCCDS=4
+# Push BT controller allocations into PSRAM where they don't compete
+# with WiFi / lwIP for the precious internal DRAM pool. Without this,
+# every BLE LE Secure Connections pairing triggers an internal-DRAM
+# alloc that fails ("E BLE_INIT: Malloc failed"), the keyboard drops
+# with reason=534 (no HID service), and the pairing-retry storm leaves
+# the radio in coexistence-throttled state for the rest of the boot.
+# Slight added BT latency since PSRAM is slower than DRAM, but pairing
+# isn't latency-critical and the alternative is "BLE doesn't work".
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
 # Mute NimBLE INFO chatter (BLE_INIT logs every scan/connect cycle).
 # CONFIG_BT_NIMBLE_LOG_LEVEL_INFO is not set
 CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y

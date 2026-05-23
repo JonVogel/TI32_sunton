@@ -27,6 +27,7 @@
 #include <SPI.h>
 #include <WiFi.h>          // CALL WIFI host overrides (station mode + status)
 #include <Preferences.h>   // persistent NVS storage for WiFi credentials
+#include <esp_log.h>       // esp_log_level_set — silence WiFi/BT spam
 #include <esp_wifi.h>      // esp_wifi_set_ps — stronger than WiFi.setSleep
 #include <esp_coexist.h>   // esp_coex_preference_set — BT vs WiFi arbiter
 #include "rgb_db.h"
@@ -3957,6 +3958,20 @@ void setup()
   Serial.setRxBufferSize(4096);
   Serial.begin(115200);
   delay(500);
+
+  // Silence the noisy WiFi log. "wifi:m f null" is the null-data-frame
+  // ping the radio sends during modem-sleep windows; we tried hard to
+  // disable modem sleep (WiFi.setSleep(false) + esp_wifi_set_ps +
+  // esp_coex_preference_set) but BT/WiFi coexistence forces it back on
+  // when BT is doing crypto. The spam is benign but drowns out useful
+  // log lines. Setting "wifi" tag to ERROR hides both INFO and WARN.
+  // The "BLE_INIT: Malloc failed" line is a transient BT coexistence
+  // event during pairing crypto — keep BLE_INIT at WARN so we still
+  // see real BT errors.
+  esp_log_level_set("wifi",     ESP_LOG_ERROR);
+  esp_log_level_set("NimBLE",   ESP_LOG_WARN);
+  esp_log_level_set("BLE_INIT", ESP_LOG_WARN);
+  esp_log_level_set("phy_init", ESP_LOG_WARN);
 
   // (No onboard status LEDs on the 8048S043C)
 
