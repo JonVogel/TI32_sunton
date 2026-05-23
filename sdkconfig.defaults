@@ -58,8 +58,13 @@ CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
 # packets arrive in order. TCP window/send still 4 KB (LAN-speed
 # bursts don't benefit from window scaling).
 CONFIG_LWIP_MAX_SOCKETS=4
-CONFIG_LWIP_TCP_WND_DEFAULT=4096
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=4096
+# TCP window + send buffer back up to 8 KB. We tried 4 KB during the
+# initial DRAM diet but it throttled the 8 KB SPA HTML to ~130 B/s:
+# server could only have 4 KB unacked, so every response paid an
+# RTT-mid-stream. 8 KB lets the SPA stream in one window. Net DRAM
+# cost is ~8 KB extra in lwIP, well within budget post-WiFi-trim.
+CONFIG_LWIP_TCP_WND_DEFAULT=8192
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=8192
 CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=2560
 # CONFIG_LWIP_TCP_QUEUE_OOSEQ is not set
 # CONFIG_LWIP_TCP_SACK_OUT is not set

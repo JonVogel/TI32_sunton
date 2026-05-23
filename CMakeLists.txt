@@ -31,12 +31,12 @@ project(ti-extended-basic-esp32)
 idf_build_set_property(COMPILE_OPTIONS "-Wno-error=overloaded-virtual" APPEND)
 
 # AsyncTCP's library defaults (in src/AsyncTCP.h, behind #ifndef) ship
-# a 16 KB task stack and a 5-second ACK timeout — sized for general
-# Arduino use, not for our 1-client-at-a-time profile. Override here
-# so we don't have to edit the submodule. 4 KB stack is plenty for
-# this task (it dispatches lwIP events, doesn't run app logic), and
+# a 16 KB task stack and a 5-second ACK timeout. We tried 4 KB during
+# the initial DRAM diet but the SPA response path (4 KB+ HTML through
+# beginResponse_P) overflowed it. 8 KB is half the upstream default
+# and the smallest size that handled the SPA without panicking.
 # 3 s ACK timeout matches the responsiveness LAN clients expect.
 target_compile_definitions(__idf_AsyncTCP PRIVATE
-    CONFIG_ASYNC_TCP_STACK_SIZE=4096
+    CONFIG_ASYNC_TCP_STACK_SIZE=8192
     CONFIG_ASYNC_TCP_MAX_ACK_TIME=3000
 )

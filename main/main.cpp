@@ -27,6 +27,8 @@
 #include <SPI.h>
 #include <WiFi.h>          // CALL WIFI host overrides (station mode + status)
 #include <Preferences.h>   // persistent NVS storage for WiFi credentials
+#include <esp_wifi.h>      // esp_wifi_set_ps — stronger than WiFi.setSleep
+#include <esp_coexist.h>   // esp_coex_preference_set — BT vs WiFi arbiter
 #include "rgb_db.h"
 #include "ti_font.h"
 #include "ble_keyboard.h"
@@ -88,6 +90,26 @@ void tiYield()
 // poll for the ONLINE transition rather than block boot on it.
 static Preferences g_wifiPrefs;
 
+// Force WiFi to own the radio whenever it's needed, even with NimBLE
+// active. The Arduino WiFi.setSleep(false) wrapper gets overridden by
+// the BT/WiFi coexistence policy ("wifi:Coexist!!! Wi-Fi station would
+// only keep waked when available"), leaving the modem in sleep cycles
+// that throttle HTTP responses to ~130 B/s. The IDF-level calls below
+// are stronger:
+//   esp_wifi_set_ps(WIFI_PS_NONE)              - tell the WiFi driver
+//                                                 itself: do not enter
+//                                                 modem sleep.
+//   esp_coex_preference_set(ESP_COEX_PREFER_WIFI) - tell the BT/WiFi
+//                                                 arbiter: WiFi wins
+//                                                 when both want air.
+// BLE keyboard latency may suffer slightly during heavy HTTP traffic;
+// for a 1-client file manager that's the right trade.
+static void applyWifiRadioPolicy()
+{
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  esp_coex_preference_set(ESP_COEX_PREFER_WIFI);
+}
+
 void tiWifiSet(const char* ssid, const char* pass)
 {
   if (!ssid) { return; }
@@ -97,6 +119,7 @@ void tiWifiSet(const char* ssid, const char* pass)
   g_wifiPrefs.end();
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass ? pass : "");
+  applyWifiRadioPolicy();
 }
 
 void tiWifiForget()
@@ -130,6 +153,7 @@ void tiWifiOn()
   {
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid.c_str(), pass.c_str());
+    applyWifiRadioPolicy();
   }
 }
 
