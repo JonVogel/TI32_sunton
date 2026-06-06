@@ -1,15 +1,3 @@
-[submodule "TI_Extended_Basic_Interpreter"]
-	path = TI_Extended_Basic_Interpreter
-	url = https://github.com/JonVogel/TI_Extended_Basic_Interpreter.git
-[submodule "ESP32_File_Handling"]
-	path = ESP32_File_Handling
-	url = https://github.com/JonVogel/ESP32_File_Handling.git
-[submodule "BleHidHost"]
-	path = BleHidHost
-	url = https://github.com/JonVogel/BleHidHost.git
-[submodule "TI_Font"]
-	path = TI_Font
-	url = https://github.com/JonVogel/TI_Font.git
 [submodule "components/Arduino_GFX"]
 	path = components/Arduino_GFX
 	url = https://github.com/JonVogel/Arduino_GFX.git
@@ -33,3 +21,7 @@
 [submodule "docs"]
 	path = docs
 	url = https://github.com/JonVogel/TI32_docs.git
+[submodule "components/ti-emulator"]
+	path = components/ti-emulator
+	url = https://github.com/JonVogel/TI_EB_Emulator_ESP.git
+	branch = main

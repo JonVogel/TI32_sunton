@@ -17,14 +17,17 @@ idf_component_register(
         # we wrap that with the local components/arduino/ shim so we
         # can reference it as the short name "arduino".
         arduino
-        # The 4 legacy host-shared libraries, each wrapped as an IDF
-        # component by a CMakeLists.txt under components/ that points
-        # back into the submodule dir at repo root. Submodules stay
-        # untouched. See components/<name>/CMakeLists.txt for each.
-        interpreter        # TI_Extended_Basic_Interpreter (BASIC engine)
-        ble_hid_host       # BleHidHost (NimBLE multi-peer HID host)
-        file_handling      # ESP32_File_Handling (LittleFS / SD / DSK)
-        ti_font            # TI_Font (8x8 ROM font + logo)
+        # The host-shared layers come from the consolidated
+        # TI_EB_Emulator_ESP submodule (components/ti-emulator/). Its
+        # own components/ subdir is added to EXTRA_COMPONENT_DIRS at
+        # the top-level CMakeLists, so each one is referenced by name
+        # here. Same bundle Box-3 uses — single source of truth, so a
+        # fix in the interpreter or file_handling lands on both targets
+        # via one submodule bump.
+        interpreter        # TI Extended BASIC engine
+        ble_hid_host       # NimBLE multi-peer BLE HID host
+        file_handling      # LittleFS / SD / V9T9 DSK file I/O
+        font               # 8x8 TI ROM font + TI logo (was: ti_font)
         # Third-party Arduino libraries (as IDF components under
         # components/). JonVogel forks because upstream has no IDF
         # support; the GFX fork only adds a CMakeLists.txt wrapper,

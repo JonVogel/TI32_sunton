@@ -1,11 +1,25 @@
 cmake_minimum_required(VERSION 3.16)
 
-# Local components live under components/. For now that's just the
-# `arduino` shim (so downstream code can `REQUIRES arduino` instead of
-# the awkward `espressif__arduino-esp32`). More component dirs will be
-# added in later commits as we move source out of root into the IDF
-# layout.
-set(EXTRA_COMPONENT_DIRS components)
+# Two component search paths:
+#   components/                          — local components + third-party
+#                                          submodules (Arduino_GFX,
+#                                          NimBLE-Arduino, AsyncTCP,
+#                                          ESPAsyncWebServer, web_files,
+#                                          arduino shim).
+#   components/ti-emulator/components    — consolidated TI emulator
+#                                          submodule (JonVogel/
+#                                          TI_EB_Emulator_ESP) exposes
+#                                          5 components inside its own
+#                                          components/ subdir:
+#                                          interpreter, font, speech,
+#                                          ble_hid_host, file_handling.
+#                                          Same source of truth Box-3
+#                                          uses, so both targets stay
+#                                          in sync.
+set(EXTRA_COMPONENT_DIRS
+    components
+    components/ti-emulator/components
+)
 
 # 8048S043C has a CH340 USB-UART bridge wired to UART0 (NOT native
 # USB-Serial-JTAG like the Box-3), so Serial.print routes through the
