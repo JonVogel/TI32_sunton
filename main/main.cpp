@@ -2132,6 +2132,44 @@ static int editorReadChar()
     }
     skipNextLf = false;
     if (c == '\t') continue;
+    // Most PC terminals send Ctrl+H (0x08) for the BACKSPACE key, but the
+    // editor uses 0x08 internally for LEFT-arrow (the TI CHR$ code that
+    // BLE keyboards' arrow keys are mapped to). Re-tag serial 0x08 as
+    // 0x7F so it hits the BACKSPACE handler. BLE input bypasses this
+    // path, so LEFT-arrow on BLE keyboards still works.
+    if (c == 0x08) return 0x7F;
+    // ANSI CSI cursor sequence — PC terminals send arrow keys as
+    // ESC [ A/B/C/D (UP/DOWN/RIGHT/LEFT), DEL as ESC [ 3 ~, HOME as
+    // ESC [ H. Without this the [, A, etc. get inserted as literal
+    // chars (the "garbage" symptom). Terminals send the whole sequence
+    // back-to-back so the rest is already in the paste buffer when we
+    // see ESC; if it isn't, treat as a lone ESC (used by CAT/DIR cancel).
+    if (c == 0x1B)
+    {
+      if (pasteAvailable() && pasteBuf[pasteTail] == '[')
+      {
+        pasteRead();   // consume '['
+        if (!pasteAvailable()) return 0x1B;
+        uint8_t code = (uint8_t)pasteRead();
+        switch (code)
+        {
+          case 'A': return 0x0B;   // UP
+          case 'B': return 0x0A;   // DOWN
+          case 'C': return 0x09;   // RIGHT
+          case 'D': return 0x08;   // LEFT
+          case 'H': return 0x05;   // HOME = BEGIN (FCTN+5)
+          case '3':                 // ESC [ 3 ~ — Delete key
+            if (pasteAvailable() && pasteBuf[pasteTail] == '~')
+            {
+              pasteRead();
+              return 0x07;          // DEL (FCTN+1)
+            }
+            continue;
+          default: continue;        // unknown CSI — swallow
+        }
+      }
+      return 0x1B;
+    }
     return c;
   }
 
@@ -2236,12 +2274,29 @@ static void editDeleteAtCursor(LineEdit& s)
   editSyncCursor(s);
 }
 
-// Backspace: move cursor left then delete the char now under it.
+// Backspace: delete the character currently under the cursor, then move
+// the cursor left. This matches the TI block-cursor mental model — the
+// cursor sits ON a character, and BACKSPACE removes that character so
+// the cursor block visibly disappears WITH its char (the previous PC-
+// style move-then-delete shifted the char to the left out from under
+// the block, leaving the same-looking glyph under the cursor and giving
+// the illusion that backspace did nothing). At end-of-line (cursor past
+// the last char, no char under it) we instead back up onto the last
+// char and delete it — so "HELLO" + BACKSPACE still leaves "HELL".
+// Backspace: PC-style — delete the character to the left of the cursor
+// and move the cursor onto its position. Implemented as "move cursor
+// left, then delete char now under it". Mirrors the erase to the USB
+// serial terminal with the standard "\b \b" sequence so the serial
+// monitor visibly removes the char too (editTypeChar echoes typed
+// chars to Serial for paste visibility, so without this the terminal
+// kept showing what was streamed and backspace looked like a no-op).
 static void editBackspace(LineEdit& s)
 {
   if (s.pos == 0) return;
   s.pos--;
   editDeleteAtCursor(s);
+  Serial.write("\b \b", 3);
+  Serial.flush();
 }
 
 // Insert or overwrite `c` at the cursor and advance.
