@@ -1428,81 +1428,31 @@ static void spriteTick()
   if (anyMoved) tft->flush();
 }
 
-static void scrollUp()
+// scrollUp / tiPrintChar / tiPrintString / printLine / printError /
+// tiClearScreen all moved to host_common — tiPrintChar/tiPrintString/
+// tiClearScreen live at global scope there (strong overrides of
+// ti_platform.h weak symbols), so nothing to `using` for those; the
+// linker picks them up. printLine + printError + scrollUp are shared
+// helpers that stay namespaced.
+using tihost::scrollUp;
+using tihost::printLine;
+using tihost::printError;
+
+// Hook implementations for host_common. hostPostScroll runs after
+// scrollUp so sprites get redrawn on top of the freshly-scrolled grid;
+// hostPaintBorder repaints the TI-style border ring around the char
+// grid on the 800x480 panel (sunton has substantial letterbox area).
+// hostFillBackground drives whole-panel refresh via the sunton pattern:
+// black outside + TI-cyan border ring + bg-color grid.
+static void hostPostScroll_impl() { spriteRedrawAll(); }
+static void hostPaintBorder_impl() { paintBorder(); }
+static void hostFillBackground_impl(uint16_t bg)
 {
-  memcpy(&screenBuf[0][0], &screenBuf[1][0], COLS * (ROWS - 1));
-  memset(&screenBuf[ROWS - 1][0], 0x20, COLS);
-  refreshScreen();
-  spriteRedrawAll();
-  int y = (ROWS - 1) * CHAR_H + DISPLAY_Y_OFFSET;
-  tft->fillRect(DISPLAY_X_OFFSET, y, COLS * CHAR_W, CHAR_H, bgColor);
-}
-
-void tiPrintChar(char c)
-{
-  // Mirror output to serial terminal for copy/paste
-  Serial.write(c);
-  if (c == '\n')
-  {
-    Serial.write('\r');
-  }
-
-  // TI behavior: cursor always on bottom row (ROWS-1 = 23).
-  // '\n' scrolls up one row and resets column to 0.
-  if (c == '\n')
-  {
-    scrollUp();
-    cursorRow = ROWS - 1;
-    cursorCol = 0;
-    return;
-  }
-
-  // Column wrap — scroll up and start fresh at col 0
-  if (cursorCol >= COLS)
-  {
-    scrollUp();
-    cursorRow = ROWS - 1;
-    cursorCol = 0;
-  }
-
-  screenBuf[cursorRow][cursorCol] = c;
-  drawCell(cursorCol, cursorRow);
-  prevScreenBuf[cursorRow][cursorCol] = c;
-  cursorCol++;
-}
-
-void tiPrintString(const char* str)
-{
-  while (*str)
-  {
-    tiPrintChar(*str++);
-  }
-  tft->flush();  
-}
-
-static void printLine(const char* str)
-{
-  tiPrintString(str);
-  tiPrintChar('\n');
-  tft->flush();
-}
-
-// TI-style error print: blank line, error message, blank line, plus a
-// BEL (0x07) to the serial terminal so monitors that honor it beep.
-static void printError(const char* str)
-{
-  printLine("");
-  printLine(str);
-  printLine("");
-}
-
-void tiClearScreen()
-{
-  memset(screenBuf, ' ', COLS * ROWS);
-  fillBackground(bgColor);
-  // TI behavior: cursor on bottom row after CLEAR
-  cursorCol = 0;
-  cursorRow = ROWS - 1;
+  tft->fillScreen(0x0000);
+  paintBorder();
+  int gx = DISPLAY_X_OFFSET;
+  int gy = DISPLAY_Y_OFFSET;
+  tft->fillRect(gx, gy, COLS * CHAR_W, ROWS * CHAR_H, bg);
 }
 
 // Move cursor to bottom row for INPUT (TI behavior — INPUT always at row 24).
@@ -4181,8 +4131,10 @@ void setup()
     display.hostPutPixel    = hostPutPixel_impl;
     display.hostFillScreen  = hostFillScreen_impl;
     display.hostFlush       = hostFlush_impl;
-    display.hostPaintBorder = nullptr;   // wired when scrollUp moves
-    display.hostHonk        = nullptr;   // no audio
+    display.hostPaintBorder    = hostPaintBorder_impl;
+    display.hostHonk           = nullptr;   // no audio on 8048S043C
+    display.hostPostScroll     = hostPostScroll_impl;
+    display.hostFillBackground = hostFillBackground_impl;
 
     tihost::hostCommonInit(cfg, display);
   }
