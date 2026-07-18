@@ -31,7 +31,9 @@
 #include <esp_heap_caps.h> // heap_caps_get_free_size — DRAM budget probes
 #include <esp_wifi.h>      // esp_wifi_set_ps — stronger than WiFi.setSleep
 #include <esp_coexist.h>   // esp_coex_preference_set — BT vs WiFi arbiter
-#include "rgb_db.h"
+// rgb_db.h now lives inside the display_arduino_gfx_sunton component
+// (private header — main.cpp only needs the RGBDisplayDB* tft extern
+// declared in display_sunton.h).
 #include "ti_font.h"
 #include "ble_keyboard.h"
 #include "exec_manager.h"
@@ -912,20 +914,14 @@ static int detokenizeLine(const uint8_t* tokens, int length, char* buf,
 // buffer; commitFrame() (called via tft->flush()) swaps front/back at
 // vsync for tear-free output. See rgb_db.h for full rationale.
 // ---------------------------------------------------------------------------
-static Arduino_ESP32RGBPanelDB *rgbBus = new Arduino_ESP32RGBPanelDB(
-    40 /* DE */, 41 /* VSYNC */, 39 /* HSYNC */, 42 /* PCLK */,
-    45 /* R0 */, 48 /* R1 */, 47 /* R2 */, 21 /* R3 */, 14 /* R4 */,
-    5  /* G0 */, 6  /* G1 */, 7  /* G2 */, 15 /* G3 */, 16 /* G4 */, 4 /* G5 */,
-    8  /* B0 */, 3  /* B1 */, 46 /* B2 */, 9  /* B3 */, 1  /* B4 */,
-    0, 8, 4, 8,      // hsync: polarity, front porch, pulse width, back porch
-    0, 8, 4, 8,      // vsync: polarity, front porch, pulse width, back porch
-    1, 14000000,     // pclk_active_neg, prefer_speed (14 MHz)
-    false,           // useBigEndian
-    0, 0,            // de_idle_high, pclk_idle_high
-    20 * 800         // bounce_buffer_size_px (20 lines × 800 px = 32 KB SRAM)
-);
-
-static RGBDisplayDB *tft = new RGBDisplayDB(800, 480, rgbBus);
+// RGB parallel bus + tft pointer + panel init + paintBorder + the six
+// panel-side TiDisplay hooks now live in the display_arduino_gfx_sunton
+// component. tft is exposed via `extern RGBDisplayDB* tft` for main.cpp's
+// remaining direct tft-> calls (boot screen + drawStatusText). Those
+// move into host_common in later commits.
+#include "display_sunton.h"
+using display_arduino_gfx_sunton::tft;
+using display_arduino_gfx_sunton::paintBorder;
 
 // Screen grid + cursor state + color caches now live in the shared
 // host_common component (ti-emulator/components/host_common). Same
@@ -944,47 +940,9 @@ using tihost::fgColor;
 using tihost::bgColor;
 using tihost::resolveColor;
 
-// Paint an 8-px TI-style screen-color frame hugging the 32x24 grid.
-// Top / bottom span the full border ring width; left / right strips
-// cover the grid height plus the top and bottom strips (so the ring
-// joins at the corners without gaps).
-static void paintBorder()
-{
-  int frameX = DISPLAY_X_OFFSET - BORDER_W;
-  int frameY = DISPLAY_Y_OFFSET - BORDER_W;
-  int frameW = COLS * CHAR_W + 2 * BORDER_W;
-  int frameH = ROWS * CHAR_H + 2 * BORDER_W;
-  // Top
-  tft->fillRect(frameX, frameY, frameW, BORDER_W, bgColor);
-  // Bottom
-  tft->fillRect(frameX, GRID_BOTTOM_Y, frameW, BORDER_W, bgColor);
-  // Left
-  tft->fillRect(frameX, DISPLAY_Y_OFFSET, BORDER_W, ROWS * CHAR_H,
-                bgColor);
-  // Right
-  int rightX = DISPLAY_X_OFFSET + COLS * CHAR_W;
-  tft->fillRect(rightX, DISPLAY_Y_OFFSET, BORDER_W, ROWS * CHAR_H,
-                bgColor);
-  (void)frameH;   // reserved for future use
-}
-
-static void initDisplay()
-{
-  // Keep backlight off until display is ready to prevent showing garbage
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, LOW);
-
-  tft->begin();
-  // 180° rotation puts the SD-card slot / connectors at the top of
-  // the visible image. RGB panels usually only honor rotation 0
-  // natively; if 2 doesn't take, drawing will look unrotated and we
-  // can fall back to app-level coordinate flipping.
-  tft->setRotation(2);
-  tft->fillScreen(0x0000);   // black surround until fillBackground runs
-  tft->flush();              // commit so panel actually shows it
-
-  digitalWrite(TFT_BL, HIGH);
-}
+// paintBorder + initDisplay moved into display_arduino_gfx_sunton.
+// paintBorder is now wired via display.hostPaintBorder from the
+// module's init(); nothing here to call it directly.
 
 // resolveColor moved to host_common — see ti_host.h `using` above.
 
@@ -999,30 +957,11 @@ using tihost::drawCell;
 using tihost::refreshScreen;
 using tihost::redrawScreen;
 
-// TiDisplay hook wrappers. Same idea as box's — thin one-liners around
-// the module-level Arduino_GFX `tft` pointer. Kept in this TU so `tft`
-// stays private to sunton's main.cpp.
-static void hostPushCell_impl(int px, int py, int w, int h,
-                              const uint16_t* pixels)
-{
-  tft->draw16bitRGBBitmap(px, py, (uint16_t*)pixels, w, h);
-}
-static void hostFillRect_impl(int px, int py, int w, int h, uint16_t color)
-{
-  tft->fillRect(px, py, w, h, color);
-}
-static void hostPutPixel_impl(int px, int py, uint16_t color)
-{
-  tft->writePixel(px, py, color);
-}
-static void hostFillScreen_impl(uint16_t color)
-{
-  tft->fillScreen(color);
-}
-static void hostFlush_impl()
-{
-  tft->flush();
-}
+// TiDisplay panel-side hooks (hostPushCell/FillRect/PutPixel/FillScreen/
+// Flush/PaintBorder/FillBackground) all live in
+// components/display_arduino_gfx_sunton/ now. main.cpp only fills in
+// the feature-side hooks (hostPostScroll, hostReadBleKey) after the
+// module's init() returns.
 
 // --- Software sprite layer ---
 //
@@ -1444,16 +1383,11 @@ using tihost::printError;
 // grid on the 800x480 panel (sunton has substantial letterbox area).
 // hostFillBackground drives whole-panel refresh via the sunton pattern:
 // black outside + TI-cyan border ring + bg-color grid.
+// hostPaintBorder + hostFillBackground moved to the
+// display_arduino_gfx_sunton component — they use the panel driver
+// directly, so they belong with the display module. hostPostScroll
+// still uses sunton's sprite state so stays per-host.
 static void hostPostScroll_impl() { spriteRedrawAll(); }
-static void hostPaintBorder_impl() { paintBorder(); }
-static void hostFillBackground_impl(uint16_t bg)
-{
-  tft->fillScreen(0x0000);
-  paintBorder();
-  int gx = DISPLAY_X_OFFSET;
-  int gy = DISPLAY_Y_OFFSET;
-  tft->fillRect(gx, gy, COLS * CHAR_W, ROWS * CHAR_H, bg);
-}
 
 // Move cursor to bottom row for INPUT (TI behavior — INPUT always at row 24).
 // With the new print model, we just need to ensure we're at col 0.
@@ -3819,41 +3753,23 @@ void setup()
   }
 
   initTokenNames();
-  initDisplay();
 
-  // Register sunton's geometry + display hooks with host_common. The
-  // shared drawCell/refreshScreen/redrawScreen call back through the
-  // TiDisplay pointers set here. Sunton uses 2x-scaled 16x16 cells on
-  // an 800x480 RGB parallel panel; the DISPLAY_*_OFFSETs put the TI
-  // grid centered with the letterbox bars host_common's scrollUp will
-  // later paint via paintBorder.
+  // Panel driver + geometry + panel-side hooks come from the
+  // display_arduino_gfx_sunton component. Feature flags + feature
+  // hooks (BLE key read, sprite redraw after scroll) are per-host.
   {
     tihost::TiHostConfig cfg = {};
-    cfg.cols             = COLS;
-    cfg.rows             = ROWS;
-    cfg.char_w           = CHAR_W;
-    cfg.char_h           = CHAR_H;
-    cfg.screen_w         = SCREEN_W;
-    cfg.screen_h         = SCREEN_H;
-    cfg.display_x_offset = DISPLAY_X_OFFSET;
-    cfg.display_y_offset = DISPLAY_Y_OFFSET;
-    cfg.has_audio        = false;   // no audio codec on 8048S043C
-    cfg.has_ble_kb       = true;
-    cfg.has_wifi         = true;
-    cfg.has_pairing_ui   = false;   // pairing runs headless on sunton
+    tihost::TiDisplay    display = {};
+    display_arduino_gfx_sunton::init(cfg, display);
 
-    tihost::TiDisplay display = {};
-    display.hostBegin       = nullptr;
-    display.hostPushCell    = hostPushCell_impl;
-    display.hostFillRect    = hostFillRect_impl;
-    display.hostPutPixel    = hostPutPixel_impl;
-    display.hostFillScreen  = hostFillScreen_impl;
-    display.hostFlush       = hostFlush_impl;
-    display.hostPaintBorder    = hostPaintBorder_impl;
-    display.hostHonk           = nullptr;   // no audio on 8048S043C
-    display.hostPostScroll     = hostPostScroll_impl;
-    display.hostFillBackground = hostFillBackground_impl;
-    display.hostReadBleKey     = hostReadBleKey_impl;
+    cfg.has_audio      = false;   // no audio codec on 8048S043C
+    cfg.has_ble_kb     = true;
+    cfg.has_wifi       = true;
+    cfg.has_pairing_ui = false;   // pairing runs headless on sunton
+
+    display.hostHonk       = nullptr;   // no audio on 8048S043C
+    display.hostPostScroll = hostPostScroll_impl;
+    display.hostReadBleKey = hostReadBleKey_impl;
 
     tihost::hostCommonInit(cfg, display);
 

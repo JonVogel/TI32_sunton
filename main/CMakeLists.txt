@@ -2,13 +2,13 @@
 # framework spawns its own task that calls setup() then loop() — we
 # don't need to write app_main().
 #
-# rgb_db.cpp is the host-side double-buffered RGB-panel wrapper
-# (Arduino_ESP32RGBPanelDB + RGBDisplayDB). It lives here in main/
-# because it's host-board-specific, not a reusable library.
+# The 8048S043C panel driver + rgb_db.cpp double-buffered RGB wrapper
+# now live in components/display_arduino_gfx_sunton — main.cpp just
+# calls display_arduino_gfx_sunton::init() and uses the extern tft
+# pointer for its remaining direct calls (boot screen + status bar).
 idf_component_register(
     SRCS
         "main.cpp"
-        "rgb_db.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         # Arduino layer (added via idf_component.yml) gives us Serial,
@@ -31,6 +31,10 @@ idf_component_register(
         host_common        # shared host layer (palette, resolveColor,
                            # eventually line editor + tiPrint family +
                            # boot screen + sprites + command dispatch)
+        # Panel driver + tft globals — one of a family of
+        # display_XXX components. Pull in a different one to target
+        # a different panel; nothing else in main.cpp needs to change.
+        display_arduino_gfx_sunton
         # Third-party Arduino libraries (as IDF components under
         # components/). JonVogel forks because upstream has no IDF
         # support; the GFX fork only adds a CMakeLists.txt wrapper,
