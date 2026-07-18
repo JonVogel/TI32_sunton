@@ -28,6 +28,9 @@ idf_component_register(
         ble_hid_host       # NimBLE multi-peer BLE HID host
         file_handling      # LittleFS / SD / V9T9 DSK file I/O
         font               # 8x8 TI ROM font + TI logo (was: ti_font)
+        host_common        # shared host layer (palette, resolveColor,
+                           # eventually line editor + tiPrint family +
+                           # boot screen + sprites + command dispatch)
         # Third-party Arduino libraries (as IDF components under
         # components/). JonVogel forks because upstream has no IDF
         # support; the GFX fork only adds a CMakeLists.txt wrapper,
