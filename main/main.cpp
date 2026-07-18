@@ -990,61 +990,38 @@ static void initDisplay()
 
 // Draw one 8x8 TI character scaled 2x into the 16x16 screen cell.
 // Each source pixel becomes a 2x2 block in the output buffer.
-static void drawCell(int col, int row)
+// drawCell / refreshScreen / redrawScreen moved to host_common — see
+// ti_host.h `using` at top of file. host_common's refreshScreen doesn't
+// insert a per-row yield() call; the diff-based refresh usually only
+// touches a handful of cells so the yield noise it added wasn't
+// pulling its weight even on sunton.
+using tihost::drawCell;
+using tihost::refreshScreen;
+using tihost::redrawScreen;
+
+// TiDisplay hook wrappers. Same idea as box's — thin one-liners around
+// the module-level Arduino_GFX `tft` pointer. Kept in this TU so `tft`
+// stays private to sunton's main.cpp.
+static void hostPushCell_impl(int px, int py, int w, int h,
+                              const uint16_t* pixels)
 {
-  uint8_t ch = (uint8_t)screenBuf[row][col];
-  int px = col * CHAR_W + DISPLAY_X_OFFSET;
-  int py = row * CHAR_H + DISPLAY_Y_OFFSET;
-
-  uint16_t fg = resolveColor(charFgIdx[ch]);
-  uint16_t bg = resolveColor(charBgIdx[ch]);
-
-  uint16_t pixBuf[CHAR_W * CHAR_H];   // 16 * 16 = 256
-  for (int y = 0; y < 8; y++)
-  {
-    uint8_t bits = charPatterns[ch][y];
-    uint16_t *row0 = &pixBuf[(y * 2)     * CHAR_W];
-    uint16_t *row1 = &pixBuf[(y * 2 + 1) * CHAR_W];
-    for (int x = 0; x < 8; x++)
-    {
-      uint16_t c = (bits & 0x80) ? fg : bg;
-      row0[x * 2]     = c;
-      row0[x * 2 + 1] = c;
-      row1[x * 2]     = c;
-      row1[x * 2 + 1] = c;
-      bits <<= 1;
-    }
-  }
-  tft->draw16bitRGBBitmap(px, py, pixBuf, CHAR_W, CHAR_H);
+  tft->draw16bitRGBBitmap(px, py, (uint16_t*)pixels, w, h);
 }
-
-static void refreshScreen()
+static void hostFillRect_impl(int px, int py, int w, int h, uint16_t color)
 {
-  for (int r = 0; r < ROWS; r++)
-  {
-    for (int c = 0; c < COLS; c++)
-    {
-      if (screenBuf[r][c] != prevScreenBuf[r][c])
-      {
-        drawCell(c, r);
-        prevScreenBuf[r][c] = screenBuf[r][c];
-      }
-    }
-    yield();
-  }
+  tft->fillRect(px, py, w, h, color);
 }
-
-static void redrawScreen()
+static void hostPutPixel_impl(int px, int py, uint16_t color)
 {
-  for (int r = 0; r < ROWS; r++)
-  {
-    for (int c = 0; c < COLS; c++)
-    {
-      drawCell(c, r);
-      prevScreenBuf[r][c] = screenBuf[r][c];
-    }
-    yield();
-  }
+  tft->writePixel(px, py, color);
+}
+static void hostFillScreen_impl(uint16_t color)
+{
+  tft->fillScreen(color);
+}
+static void hostFlush_impl()
+{
+  tft->flush();
 }
 
 // --- Software sprite layer ---
@@ -4175,6 +4152,41 @@ void setup()
 
   initTokenNames();
   initDisplay();
+
+  // Register sunton's geometry + display hooks with host_common. The
+  // shared drawCell/refreshScreen/redrawScreen call back through the
+  // TiDisplay pointers set here. Sunton uses 2x-scaled 16x16 cells on
+  // an 800x480 RGB parallel panel; the DISPLAY_*_OFFSETs put the TI
+  // grid centered with the letterbox bars host_common's scrollUp will
+  // later paint via paintBorder.
+  {
+    tihost::TiHostConfig cfg = {};
+    cfg.cols             = COLS;
+    cfg.rows             = ROWS;
+    cfg.char_w           = CHAR_W;
+    cfg.char_h           = CHAR_H;
+    cfg.screen_w         = SCREEN_W;
+    cfg.screen_h         = SCREEN_H;
+    cfg.display_x_offset = DISPLAY_X_OFFSET;
+    cfg.display_y_offset = DISPLAY_Y_OFFSET;
+    cfg.has_audio        = false;   // no audio codec on 8048S043C
+    cfg.has_ble_kb       = true;
+    cfg.has_wifi         = true;
+    cfg.has_pairing_ui   = false;   // pairing runs headless on sunton
+
+    tihost::TiDisplay display = {};
+    display.hostBegin       = nullptr;
+    display.hostPushCell    = hostPushCell_impl;
+    display.hostFillRect    = hostFillRect_impl;
+    display.hostPutPixel    = hostPutPixel_impl;
+    display.hostFillScreen  = hostFillScreen_impl;
+    display.hostFlush       = hostFlush_impl;
+    display.hostPaintBorder = nullptr;   // wired when scrollUp moves
+    display.hostHonk        = nullptr;   // no audio
+
+    tihost::hostCommonInit(cfg, display);
+  }
+
   initCharPatterns();
   gfxResetColors();
 
