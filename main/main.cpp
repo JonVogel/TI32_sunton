@@ -1597,24 +1597,10 @@ static void fillBackground(uint16_t bg)
 // below still calls the sunton-local drawCell — hence stays here for now.
 using tihost::tiLogoChars;
 
-// Redefine char codes 129..137 with the logo patterns and place them in
-// a 3×3 grid on screen with the top-left at (startRow, startCol).
-static void drawTexasLogo(int startRow, int startCol)
-{
-  for (int i = 0; i < 9; i++)
-  {
-    memcpy(charPatterns[129 + i], tiLogoChars[i], 8);
-  }
-  for (int r = 0; r < 3; r++)
-  {
-    for (int c = 0; c < 3; c++)
-    {
-      int ch = 129 + r * 3 + c;
-      screenBuf[startRow + r][startCol + c] = (char)ch;
-      drawCell(startCol + c, startRow + r);
-    }
-  }
-}
+// drawTexasLogo moved to host_common (called by paintBootPage1).
+using tihost::drawTexasLogo;
+using tihost::paintBootPage1;
+using tihost::paintBootPage2;
 
 // 8x8 copyright glyph (©) used in the splash-screen copyright line.
 // copyrightBitmap now lives in host_common (see ti_host.h).
@@ -1624,71 +1610,12 @@ using tihost::copyrightBitmap;
 // Pattern approximates the 1981 TI home computer startup screen.
 static void showBootScreen()
 {
-  // Clear display to cyan in the char area, black outside
-  fillBackground(tiPalette[8]);
-
-  // Redefine char 128 as the © copyright symbol
-  memcpy(charPatterns[128], copyrightBitmap, 8);
-
-  // Stripe colors (approximating the TI pattern left to right)
-  const uint8_t stripes[] = {
-    9, 4, 2, 12, 13, 14,        // left group
-    5, 3, 14, 9, 15, 6, 10, 12, 9   // right group
-  };
-  const int numStripes = sizeof(stripes);
-
-  // 15 stripes + 1 gap = 16 slots across the full character area width.
-  // Char area = COLS * CHAR_W; each slot = that / 16.
-  const int stripeW = (COLS * CHAR_W) / 16;
-  const int stripeH = 3 * CHAR_H;    // 3 rows
-  const int gapEnd  = 7 * stripeW;   // gap = slot 6 (after the 6 left stripes)
-
-  // Top band — TI rows 1-3
-  int topY = DISPLAY_Y_OFFSET;
-  for (int i = 0; i < numStripes; i++)
-  {
-    int x = DISPLAY_X_OFFSET +
-            ((i < 6) ? i * stripeW : (i - 6) * stripeW + gapEnd);
-    tft->fillRect(x, topY, stripeW, stripeH, tiPalette[stripes[i]]);
-  }
-
-  // Bottom band — TI rows 19-21 (0-indexed 18-20)
-  int bottomY = DISPLAY_Y_OFFSET + 18 * CHAR_H;
-  for (int i = 0; i < numStripes; i++)
-  {
-    int x = DISPLAY_X_OFFSET +
-            ((i < 6) ? i * stripeW : (i - 6) * stripeW + gapEnd);
-    tft->fillRect(x, bottomY, stripeW, stripeH, tiPalette[stripes[i]]);
-  }
-
-  // Draw centered text directly via the framebuffer.
-  // Our display is 28 cols; "TEXAS INSTRUMENTS" (17) → col 5 start.
-  auto drawText = [](const char* text, int row) {
-    int len = strlen(text);
-    int col = (COLS - len) / 2;
-    if (col < 0) col = 0;
-    for (int i = 0; i < len && col + i < COLS; i++)
-    {
-      screenBuf[row][col + i] = text[i];
-      drawCell(col + i, row);
-    }
-  };
-
-  // Texas logo — 3×3 char grid at TI rows 6-8 (0-indexed 5-7)
-  drawTexasLogo(5, (COLS - 3) / 2);
-
-  drawText("TEXAS INSTRUMENTS",             9);   // TI row 10
-  drawText("HOME COMPUTER",                11);   // TI row 12
-  drawText("READY-PRESS ANY KEY TO BEGIN", 16);   // TI row 17
-  drawText("\x80" "1981    TEXAS INSTRUMENTS", 22);   // TI row 23 with ©
-  drawText("TI32 " TI32_VERSION,                23);   // TI row 24 — emulator build tag
-
-  Serial.println("PRESS ANY KEY TO CONTINUE");
-
-  // Commit the title screen so the user actually sees it before the
-  // wait loop. With double-buffering the screen stays black until
-  // flush() is called.
-  tft->flush();
+  // Boot paint routines live in host_common (paintBootPage1 handles
+  // stripes + text + TI logo + version tag; paintBootPage2 handles the
+  // 1/2 selection menu). Sunton keeps the wait loops here because
+  // they poll bleKbTask + webfiles::hasPendingRun and end with a
+  // BLE_KB scan-mode change.
+  paintBootPage1();
 
   // Wait for any key — from Serial or BLE keyboard. The title screen
   // is BLE_KB_TITLE mode (aggressive scan) so a keyboard can be turned
@@ -1709,33 +1636,7 @@ static void showBootScreen()
   // type CALL PAIR to re-engage.
   bleKbSetMode(BLE_KB_INTERACTIVE);
 
-  // Clear and show the menu screen
-  fillBackground(tiPalette[8]);
-  for (int r = 0; r < ROWS; r++)
-  {
-    memset(screenBuf[r], ' ', COLS);
-    memset(prevScreenBuf[r], 0, COLS);
-  }
-
-  auto drawText2 = [](const char* text, int row, int col) {
-    int len = strlen(text);
-    for (int i = 0; i < len && col + i < COLS; i++)
-    {
-      screenBuf[row][col + i] = text[i];
-      drawCell(col + i, row);
-    }
-  };
-
-  drawText2("TEXAS INSTRUMENTS",     0, 5);
-  drawText2("HOME COMPUTER",         1, 7);
-  drawText2("PRESS",                 3, 2);
-  drawText2("1 FOR TI BASIC",        5, 2);
-  drawText2("2 FOR TI EXTENDED BASIC", 7, 2);
-
-  Serial.println("PRESS 1 OR 2 TO CONTINUE");
-
-  // Commit menu screen before the wait loop.
-  tft->flush();
+  paintBootPage2();
 
   while (!Serial.available() && !bleKbAvailable() && !webfiles::hasPendingRun())
   {
